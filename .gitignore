@@ -1,0 +1,41 @@
+# Binaries
+diary
+diary.exe
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go build outputs
+*.test
+*.out
+
+# Go workspace
+go.work
+go.work.sum
+
+# Dependency/vendor directory
+vendor/
+
+# Local app data
+config.toml
+diary.jsonl
+
+# Common local directories
+.config/
+.local/
+
+# Logs
+*.log
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
