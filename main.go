@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,6 +18,8 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 )
+
+const appVersion = "0.9.1"
 
 type Entry struct {
 	ID        int    `json:"id"`
@@ -32,10 +35,19 @@ type Config struct {
 }
 
 type Options struct {
-	List     bool
-	ListN    int
-	Reverse  bool
-	Numbered bool
+	List              bool
+	ListN             int
+	ListLimitSet      bool
+	ListMonth         string
+	Reverse           bool
+	Numbered          bool
+	Search            bool
+	SearchQuery       string
+	InteractiveSearch bool
+	Backup            bool
+	BackupPath        string
+	Restore           bool
+	RestorePath       string
 
 	Add     bool
 	AddDate string
@@ -70,10 +82,12 @@ func main() {
 		if err := addOrUpdateEntry(&entries, opts, cfg); err != nil {
 			exitErr("%v", err)
 		}
-		if err := saveEntries(cfg.DataFile, entries); err != nil {
+		backupPath, err := saveWithAutomaticBackup(cfg.DataFile, entries)
+		if err != nil {
 			exitErr("保存エラー: %v", err)
 		}
 		fmt.Println("保存しました。")
+		fmt.Printf("自動バックアップ: %s\n", backupPath)
 
 	case opts.Delete:
 		var deleted bool
@@ -81,13 +95,39 @@ func main() {
 		if !deleted {
 			exitErr("ID %d のデータは見つかりませんでした", opts.DeleteID)
 		}
-		if err := saveEntries(cfg.DataFile, entries); err != nil {
+		backupPath, err := saveWithAutomaticBackup(cfg.DataFile, entries)
+		if err != nil {
 			exitErr("保存エラー: %v", err)
 		}
 		fmt.Printf("ID %d を削除しました。\n", opts.DeleteID)
+		fmt.Printf("自動バックアップ: %s\n", backupPath)
 
-	case opts.List:
-		printList(entries, opts)
+	case opts.Backup:
+		path, err := backupEntries(entries, cfg.DataFile, opts.BackupPath)
+		if err != nil {
+			exitErr("バックアップエラー: %v", err)
+		}
+		fmt.Printf("バックアップを保存しました: %s\n", path)
+
+	case opts.Restore:
+		if err := confirmRestore(os.Stdin, os.Stdout); err != nil {
+			exitErr("復元エラー: %v", err)
+		}
+		safetyBackup, restoredCount, err := restoreEntries(cfg.DataFile, entries, opts.RestorePath)
+		if err != nil {
+			exitErr("復元エラー: %v", err)
+		}
+		fmt.Printf("復元しました: %s\n", opts.RestorePath)
+		fmt.Printf("復元前バックアップ: %s\n", safetyBackup)
+		fmt.Printf("復元レコード数: %d\n", restoredCount)
+
+	case opts.InteractiveSearch:
+		if err := runInteractiveSearch(entries, opts); err != nil {
+			exitErr("検索エラー: %v", err)
+		}
+
+	case opts.List || opts.Search:
+		runList(entries, opts)
 
 	default:
 		printHelp()
@@ -120,12 +160,49 @@ func parseArgs(args []string) (Options, bool, error) {
 			if i+1 < len(args) && isPositiveInt(args[i+1]) {
 				n, _ := strconv.Atoi(args[i+1])
 				opts.ListN = n
+				opts.ListLimitSet = true
 				i++
 			}
 
+		case "-m":
+			if i+1 >= len(args) {
+				return opts, false, errors.New("-m には YYYY-MM 形式の年月が必要です")
+			}
+			if !isYearMonth(args[i+1]) {
+				return opts, false, errors.New("-m には YYYY-MM 形式の年月を指定してください")
+			}
+			opts.ListMonth = args[i+1]
+			i++
+
+		case "-s":
+			if i+1 >= len(args) {
+				return opts, false, errors.New("-s には検索語が必要です")
+			}
+			opts.Search = true
+			opts.SearchQuery = args[i+1]
+			i++
+
+		case "-i":
+			opts.InteractiveSearch = true
+
+		case "-b":
+			opts.Backup = true
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				opts.BackupPath = args[i+1]
+				i++
+			}
+
+		case "-R", "--restore":
+			if i+1 >= len(args) {
+				return opts, false, errors.New("-R にはバックアップファイルのパスが必要です")
+			}
+			opts.Restore = true
+			opts.RestorePath = args[i+1]
+			i++
+
 		case "-a":
-			if opts.Delete || opts.List {
-				return opts, false, errors.New("-a は -d や -l と同時に使えません")
+			if opts.Delete || opts.List || opts.Search || opts.InteractiveSearch || opts.Backup || opts.Restore {
+				return opts, false, errors.New("-a は一覧・検索・削除・バックアップ・復元系のオプションと同時に使えません")
 			}
 			opts.Add = true
 
@@ -154,8 +231,8 @@ func parseArgs(args []string) (Options, bool, error) {
 			return opts, false, nil
 
 		case "-d":
-			if opts.Add || opts.List {
-				return opts, false, errors.New("-d は -a や -l と同時に使えません")
+			if opts.Add || opts.List || opts.Search || opts.InteractiveSearch || opts.Backup || opts.Restore {
+				return opts, false, errors.New("-d は追加・一覧・検索・バックアップ・復元系のオプションと同時に使えません")
 			}
 			opts.Delete = true
 
@@ -175,10 +252,36 @@ func parseArgs(args []string) (Options, bool, error) {
 	}
 
 	if opts.Reverse && !opts.List {
-		return opts, false, errors.New("-r は -l と一緒に使ってください")
+		if !opts.Search && !opts.InteractiveSearch {
+			return opts, false, errors.New("-r は -l、-s、-i のいずれかと一緒に使ってください")
+		}
 	}
-	if opts.Numbered && !opts.List {
-		return opts, false, errors.New("-n は -l と一緒に使ってください")
+	if opts.Numbered && !opts.List && !opts.Search && !opts.InteractiveSearch {
+		return opts, false, errors.New("-n は -l、-s、-i のいずれかと一緒に使ってください")
+	}
+	if opts.ListMonth != "" && !opts.List && !opts.Search && !opts.InteractiveSearch {
+		return opts, false, errors.New("-m は -l、-s、-i のいずれかと一緒に使ってください")
+	}
+	if opts.Search && strings.TrimSpace(opts.SearchQuery) == "" {
+		return opts, false, errors.New("検索語が空です")
+	}
+	if opts.Search && opts.InteractiveSearch {
+		return opts, false, errors.New("-s と -i は同時に使えません")
+	}
+	if opts.Backup && (opts.List || opts.Search || opts.InteractiveSearch || opts.ListMonth != "" || opts.Reverse || opts.Numbered) {
+		return opts, false, errors.New("-b は一覧・検索系のオプションと同時に使えません")
+	}
+	if opts.Backup && (opts.Add || opts.Delete) {
+		return opts, false, errors.New("-b は -a や -d と同時に使えません")
+	}
+	if opts.Restore && (opts.List || opts.Search || opts.InteractiveSearch || opts.ListMonth != "" || opts.Reverse || opts.Numbered) {
+		return opts, false, errors.New("-R は一覧・検索系のオプションと同時に使えません")
+	}
+	if opts.Restore && (opts.Add || opts.Delete || opts.Backup) {
+		return opts, false, errors.New("-R は -a、-d、-b と同時に使えません")
+	}
+	if opts.Restore && strings.TrimSpace(opts.RestorePath) == "" {
+		return opts, false, errors.New("復元元のバックアップファイルが空です")
 	}
 
 	return opts, false, nil
@@ -236,47 +339,8 @@ func deleteByID(entries []Entry, id int) ([]Entry, bool) {
 	return out, deleted
 }
 
-func printList(entries []Entry, opts Options) {
-	if len(entries) == 0 {
-		fmt.Println("日記はまだありません。")
-		return
-	}
-
-	sort.Slice(entries, func(i, j int) bool {
-		if entries[i].Date == entries[j].Date {
-			return entries[i].ID < entries[j].ID
-		}
-		return entries[i].Date > entries[j].Date
-	})
-
-	n := opts.ListN
-	if n <= 0 {
-		n = 7
-	}
-	if n > len(entries) {
-		n = len(entries)
-	}
-
-	selected := make([]Entry, n)
-	copy(selected, entries[:n])
-
-	if !opts.Reverse {
-		for i, j := 0, len(selected)-1; i < j; i, j = i+1, j-1 {
-			selected[i], selected[j] = selected[j], selected[i]
-		}
-	}
-
-	for _, e := range selected {
-		if opts.Numbered {
-			fmt.Printf("%d  %s  %s\n", e.ID, e.Date, e.Text)
-		} else {
-			fmt.Printf("%s  %s\n", e.Date, e.Text)
-		}
-	}
-}
-
 func printHelp() {
-	fmt.Println(`1行日記 CLI
+	fmt.Printf(`1行日記 CLI v%s
 
 使い方:
   diary
@@ -285,6 +349,25 @@ func printHelp() {
   diary -l [件数]
       直近の記録を古いもの順で表示
       件数省略時は 7
+
+  diary -m YYYY-MM -l [件数]
+      指定した年月の記録を表示
+      件数省略時はその月を全件表示
+
+  diary -s "検索語"
+      本文を大文字小文字を区別せず検索
+
+  diary -i
+      対話的に絞り込み検索
+
+  diary -b [保存先]
+      その場でバックアップを作成
+      保存先省略時はOSごとのローカル保存先に保存
+
+  diary -R バックアップファイル
+      バックアップファイルから復元
+      復元前のデータは自動でバックアップ
+      実行前に "diary" の入力確認あり
 
   diary -r -l [件数]
       直近の記録を新しいもの順で表示
@@ -310,7 +393,7 @@ func printHelp() {
 設定例:
   data_file = "C:\\Users\\yourname\\diary\\diary.jsonl"
   max_len = 200
-`)
+`, appVersion)
 }
 
 func loadEntries(path string) ([]Entry, error) {
@@ -385,7 +468,307 @@ func saveEntries(path string, entries []Entry) error {
 		return err
 	}
 
-	return os.Rename(tmpPath, path)
+	if err := os.Rename(tmpPath, path); err == nil {
+		return nil
+	}
+
+	_ = os.Remove(tmpPath)
+	return writeEntriesFile(path, entries)
+}
+
+func saveWithAutomaticBackup(dataFile string, entries []Entry) (string, error) {
+	if err := saveEntries(dataFile, entries); err != nil {
+		return "", err
+	}
+
+	backupPath, err := backupEntries(entries, dataFile, "")
+	if err != nil {
+		return "", fmt.Errorf("保存は完了しましたが自動バックアップに失敗しました: %w", err)
+	}
+
+	return backupPath, nil
+}
+
+func confirmRestore(in *os.File, out *os.File) error {
+	fmt.Fprintln(out, `復元を実行すると現在のデータがバックアップ元で置き換わります。続けるには "diary" と入力してください。`)
+	fmt.Fprint(out, "confirm> ")
+
+	reader := bufio.NewReader(in)
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("確認入力を読み取れませんでした: %w", err)
+	}
+	if strings.TrimSpace(line) != "diary" {
+		return errors.New(`確認に失敗したため復元を中止しました`)
+	}
+	return nil
+}
+
+func restoreEntries(dataFile string, currentEntries []Entry, restorePath string) (string, int, error) {
+	restorePath = filepath.Clean(strings.TrimSpace(restorePath))
+	if restorePath == "" {
+		return "", 0, errors.New("復元元のバックアップファイルが空です")
+	}
+	if _, err := os.Stat(restorePath); err != nil {
+		return "", 0, err
+	}
+
+	restoredEntries, err := loadEntries(restorePath)
+	if err != nil {
+		return "", 0, err
+	}
+
+	safetyBackup, err := backupEntries(currentEntries, dataFile, "")
+	if err != nil {
+		return "", 0, err
+	}
+
+	if err := saveEntries(dataFile, restoredEntries); err != nil {
+		return "", 0, err
+	}
+
+	return safetyBackup, len(restoredEntries), nil
+}
+
+func runList(entries []Entry, opts Options) {
+	if len(entries) == 0 {
+		fmt.Println("日記はまだありません。")
+		return
+	}
+
+	filtered := collectEntries(entries, opts)
+	if len(filtered) == 0 {
+		fmt.Println(emptyMessage(opts))
+		return
+	}
+
+	selected := limitEntries(filtered, opts)
+	printEntries(selected, opts)
+}
+
+func runInteractiveSearch(entries []Entry, opts Options) error {
+	if len(entries) == 0 {
+		fmt.Println("日記はまだありません。")
+		return nil
+	}
+
+	fmt.Println("対話検索モードです。検索語を入力してください。空行で終了します。")
+	scanner := bufio.NewScanner(os.Stdin)
+	for {
+		fmt.Print("search> ")
+		if !scanner.Scan() {
+			return scanner.Err()
+		}
+
+		query := strings.TrimSpace(scanner.Text())
+		if query == "" {
+			fmt.Println("終了しました。")
+			return nil
+		}
+
+		current := opts
+		current.Search = true
+		current.SearchQuery = query
+		filtered := collectEntries(entries, current)
+		fmt.Printf("%d 件ヒットしました。\n", len(filtered))
+		if len(filtered) == 0 {
+			fmt.Println(emptyMessage(current))
+			fmt.Println()
+			continue
+		}
+
+		selected := limitEntries(filtered, current)
+		printEntries(selected, current)
+		fmt.Println()
+	}
+}
+
+func collectEntries(entries []Entry, opts Options) []Entry {
+	filtered := make([]Entry, 0, len(entries))
+	monthPrefix := ""
+	if opts.ListMonth != "" {
+		monthPrefix = opts.ListMonth + "-"
+	}
+	query := strings.ToLower(strings.TrimSpace(opts.SearchQuery))
+
+	for _, entry := range entries {
+		if monthPrefix != "" && !strings.HasPrefix(entry.Date, monthPrefix) {
+			continue
+		}
+		if query != "" && !strings.Contains(strings.ToLower(entry.Text), query) {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+
+	sort.Slice(filtered, func(i, j int) bool {
+		if filtered[i].Date == filtered[j].Date {
+			return filtered[i].ID < filtered[j].ID
+		}
+		return filtered[i].Date > filtered[j].Date
+	})
+
+	return filtered
+}
+
+func limitEntries(entries []Entry, opts Options) []Entry {
+	n := resolveLimit(len(entries), opts)
+	selected := make([]Entry, n)
+	copy(selected, entries[:n])
+
+	if !opts.Reverse {
+		for i, j := 0, len(selected)-1; i < j; i, j = i+1, j-1 {
+			selected[i], selected[j] = selected[j], selected[i]
+		}
+	}
+
+	return selected
+}
+
+func resolveLimit(total int, opts Options) int {
+	if total == 0 {
+		return 0
+	}
+
+	n := 7
+	switch {
+	case opts.Search || opts.InteractiveSearch:
+		if opts.ListLimitSet {
+			n = opts.ListN
+		} else if !opts.List {
+			n = total
+		}
+	case opts.ListMonth != "" && opts.List && !opts.ListLimitSet:
+		n = total
+	case opts.ListLimitSet:
+		n = opts.ListN
+	}
+
+	if n <= 0 || n > total {
+		return total
+	}
+	return n
+}
+
+func printEntries(entries []Entry, opts Options) {
+	for _, e := range entries {
+		if opts.Numbered {
+			fmt.Printf("%d  %s  %s\n", e.ID, e.Date, e.Text)
+		} else {
+			fmt.Printf("%s  %s\n", e.Date, e.Text)
+		}
+	}
+}
+
+func emptyMessage(opts Options) string {
+	switch {
+	case opts.Search && opts.ListMonth != "":
+		return fmt.Sprintf("%s に一致する記録は %s にありません。", opts.SearchQuery, opts.ListMonth)
+	case opts.Search:
+		return fmt.Sprintf("%s に一致する記録はありません。", opts.SearchQuery)
+	case opts.ListMonth != "":
+		return fmt.Sprintf("%s の日記はありません。", opts.ListMonth)
+	default:
+		return "日記はまだありません。"
+	}
+}
+
+func backupEntries(entries []Entry, dataFile, backupPath string) (string, error) {
+	target, err := resolveBackupPath(dataFile, backupPath)
+	if err != nil {
+		return "", err
+	}
+
+	copied := make([]Entry, len(entries))
+	copy(copied, entries)
+	if err := writeBackupFile(target, copied); err != nil {
+		return "", err
+	}
+	return target, nil
+}
+
+func resolveBackupPath(dataFile, backupPath string) (string, error) {
+	baseName := strings.TrimSuffix(filepath.Base(dataFile), filepath.Ext(dataFile))
+	if baseName == "" {
+		baseName = "diary"
+	}
+	fileName := fmt.Sprintf("%s-backup-%s.jsonl", baseName, time.Now().Format("20060102-150405-000000000"))
+
+	if strings.TrimSpace(backupPath) == "" {
+		dir, err := defaultBackupDirPath()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(dir, fileName), nil
+	}
+
+	clean := filepath.Clean(backupPath)
+	info, err := os.Stat(clean)
+	if err == nil && info.IsDir() {
+		return filepath.Join(clean, fileName), nil
+	}
+	if filepath.Ext(clean) == "" {
+		return filepath.Join(clean, fileName), nil
+	}
+	return clean, nil
+}
+
+func defaultBackupDirPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+
+	return platformBackupDir(runtime.GOOS, home, os.Getenv("LOCALAPPDATA")), nil
+}
+
+func platformBackupDir(goos, home, localAppData string) string {
+	switch goos {
+	case "windows":
+		if strings.TrimSpace(localAppData) != "" {
+			return filepath.Join(localAppData, "diary", "backups")
+		}
+		return filepath.Join(home, "AppData", "Local", "diary", "backups")
+	case "darwin":
+		return filepath.Join(home, "Library", "Application Support", "diary", "backups")
+	default:
+		return filepath.Join(home, ".local", "share", "diary", "backups")
+	}
+}
+
+func writeEntriesFile(path string, entries []Entry) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Date == entries[j].Date {
+			return entries[i].ID < entries[j].ID
+		}
+		return entries[i].Date < entries[j].Date
+	})
+
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	w := bufio.NewWriter(f)
+	for _, e := range entries {
+		b, err := json.Marshal(e)
+		if err != nil {
+			return err
+		}
+		if _, err := w.WriteString(string(b) + "\n"); err != nil {
+			return err
+		}
+	}
+	return w.Flush()
+}
+
+func writeBackupFile(path string, entries []Entry) error {
+	return writeEntriesFile(path, entries)
 }
 
 func nextID(entries []Entry) int {
@@ -422,6 +805,11 @@ func isPositiveInt(s string) bool {
 
 func isDate(s string) bool {
 	_, err := time.Parse("2006-01-02", s)
+	return err == nil
+}
+
+func isYearMonth(s string) bool {
+	_, err := time.Parse("2006-01", s)
 	return err == nil
 }
 

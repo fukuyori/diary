@@ -2,8 +2,22 @@
 
 A simple one-line diary application for the command line.
 
+Current version: `0.9.1`
+
 `diary` is a lightweight CLI tool written in Go for keeping short daily notes in JSONL format.  
 Each entry is assigned a serial ID, only one entry is stored per date, and existing entries can be updated or deleted easily.
+
+---
+
+## What's New in 0.9.1
+
+- Added listing by year and month with `-m YYYY-MM`
+- Added case-insensitive text search with `-s`
+- Added interactive search mode with `-i`
+- Added automatic backup on add, update, and delete
+- Added manual backup with `-b`
+- Added restore from backup with `-R`
+- Added restore confirmation that requires typing `diary`
 
 ---
 
@@ -15,9 +29,14 @@ Each entry is assigned a serial ID, only one entry is stored per date, and exist
 - Automatic serial ID assignment
 - Update an existing entry by writing to the same date
 - List recent entries
+- List entries for a specific month
+- Search entries case-insensitively
+- Interactive narrowing search
 - Show entries in oldest-first or newest-first order
 - Optionally display serial IDs
 - Delete entries by serial ID
+- Automatic backup on write
+- Manual backup and restore
 - TOML-based configuration
 
 ---
@@ -117,6 +136,58 @@ diary -l 30
 diary -r -l 30
 ```
 
+### List all entries for a specific year and month
+
+```bash
+diary -m 2026-03 -l
+```
+
+### List entries for a specific year and month in newest-first order
+
+```bash
+diary -m 2026-03 -r -l
+```
+
+### Search entries case-insensitively
+
+```bash
+diary -s "walk"
+```
+
+### Search entries in a specific month
+
+```bash
+diary -m 2026-03 -s "walk"
+```
+
+### Start interactive search mode
+
+```bash
+diary -i
+```
+
+### Create a backup immediately
+
+```bash
+diary -b
+```
+
+### Create a backup in a specific directory
+
+```bash
+diary -b backups
+```
+
+### Restore from a backup file
+
+```bash
+diary -R C:\path\to\diary-backup-20260413-164441-000000000.jsonl
+```
+
+This command first creates a safety backup of the current data.
+
+It then asks you to type `diary` before it restores.
+
 ### List entries with serial IDs
 
 ```bash
@@ -143,12 +214,18 @@ diary -d 3
 | ---------------------------- | --------------------------------------------------------- |
 | `diary`                      | Show help                                                 |
 | `diary -l [n]`               | List recent entries in oldest-first order                 |
+| `diary -m YYYY-MM -l [n]`    | List entries for the specified year and month             |
+| `diary -s "query"`           | Search entries case-insensitively                         |
+| `diary -m YYYY-MM -s "query"`| Search entries in the specified month                     |
+| `diary -i`                   | Start interactive search mode                             |
 | `diary -r -l [n]`            | List recent entries in newest-first order                 |
 | `diary -n -l [n]`            | List recent entries with serial IDs                       |
 | `diary -r -n -l [n]`         | List recent entries with serial IDs in newest-first order |
 | `diary -a "text"`            | Add or update today's entry                               |
 | `diary -a YYYY-MM-DD "text"` | Add or update an entry for a specific date                |
 | `diary -d ID`                | Delete an entry by serial ID                              |
+| `diary -b [path]`            | Create a backup immediately                               |
+| `diary -R backup.jsonl`      | Restore from a backup file                                |
 
 ---
 
@@ -159,6 +236,15 @@ diary -d 3
 * Serial IDs are assigned only when a new entry is first created.
 * Updating an existing entry keeps its original serial ID.
 * Deletion is performed by serial ID.
+* Text search is case-insensitive.
+* `-i` starts a prompt-based narrowing search loop and exits on an empty line.
+* Add, update, and delete automatically create a timestamped `.jsonl` backup.
+* Automatic backups are stored in an OS-local directory.
+* Windows: `%LOCALAPPDATA%\diary\backups`
+* Linux: `~/.local/share/diary/backups`
+* macOS: `~/Library/Application Support/diary/backups`
+* `-b` creates an immediate backup in the same default location unless a path is given.
+* `-R` restores from a backup file, first saves the current data as a safety backup, and requires typing `diary` to proceed.
 
 ---
 
