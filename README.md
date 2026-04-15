@@ -2,14 +2,16 @@
 
 A simple one-line diary application for the command line.
 
-Current version: `0.9.1`
+[日本語版 README](README.ja.md)
+
+Current version: `0.9.2`
 
 `diary` is a lightweight CLI tool written in Go for keeping short daily notes in JSONL format.  
 Each entry is assigned a serial ID, only one entry is stored per date, and existing entries can be updated or deleted easily.
 
 ---
 
-## What's New in 0.9.1
+## What's New in 0.9.2
 
 - Added listing by year and month with `-m YYYY-MM`
 - Added case-insensitive text search with `-s`
@@ -106,6 +108,12 @@ max_len = 200
 diary
 ```
 
+### Show version
+
+```bash
+diary -v
+```
+
 ### Add an entry for today
 
 ```bash
@@ -188,6 +196,14 @@ This command first creates a safety backup of the current data.
 
 It then asks you to type `diary` before it restores.
 
+### List available backups
+
+```bash
+diary -R
+```
+
+This shows numbered backups with timestamp and record count, then asks which number to restore without returning to the command line.
+
 ### List entries with serial IDs
 
 ```bash
@@ -213,6 +229,7 @@ diary -d 3
 | Command                      | Description                                               |
 | ---------------------------- | --------------------------------------------------------- |
 | `diary`                      | Show help                                                 |
+| `diary -v`                   | Show version                                              |
 | `diary -l [n]`               | List recent entries in oldest-first order                 |
 | `diary -m YYYY-MM -l [n]`    | List entries for the specified year and month             |
 | `diary -s "query"`           | Search entries case-insensitively                         |
@@ -225,6 +242,7 @@ diary -d 3
 | `diary -a YYYY-MM-DD "text"` | Add or update an entry for a specific date                |
 | `diary -d ID`                | Delete an entry by serial ID                              |
 | `diary -b [path]`            | Create a backup immediately                               |
+| `diary -R`                   | List available backups and prompt for a restore number    |
 | `diary -R backup.jsonl`      | Restore from a backup file                                |
 
 ---
@@ -239,12 +257,14 @@ diary -d 3
 * Text search is case-insensitive.
 * `-i` starts a prompt-based narrowing search loop and exits on an empty line.
 * Add, update, and delete automatically create a timestamped `.jsonl` backup.
+* Backups are kept up to 10 files per diary data file, with older ones removed first.
 * Automatic backups are stored in an OS-local directory.
 * Windows: `%LOCALAPPDATA%\diary\backups`
 * Linux: `~/.local/share/diary/backups`
 * macOS: `~/Library/Application Support/diary/backups`
 * `-b` creates an immediate backup in the same default location unless a path is given.
-* `-R` restores from a backup file, first saves the current data as a safety backup, and requires typing `diary` to proceed.
+* `-R` with no argument lists numbered backups with timestamp and record count, then asks for the number to restore.
+* `-R backup.jsonl` restores from a backup file, first saves the current data as a safety backup, and requires typing `diary` to proceed.
 
 ---
 
@@ -263,4 +283,4 @@ This project aims to be:
 ## License
 
 This project is licensed under the MIT License.
-See the `LICENSE` file for details.
+See the `LICENCE` file for details.

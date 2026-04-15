@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -19,7 +20,16 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-const appVersion = "0.9.1"
+const appVersion = "0.9.2"
+const maxBackupHistory = 10
+const backupTimestampLayout = "20060102-150405-000000000"
+
+type BackupInfo struct {
+	Index     int
+	Path      string
+	Timestamp time.Time
+	Count     int
+}
 
 type Entry struct {
 	ID        int    `json:"id"`
@@ -48,6 +58,7 @@ type Options struct {
 	BackupPath        string
 	Restore           bool
 	RestorePath       string
+	Version           bool
 
 	Add     bool
 	AddDate string
@@ -58,11 +69,6 @@ type Options struct {
 }
 
 func main() {
-	cfg, err := loadConfig()
-	if err != nil {
-		exitErr("設定読み込みエラー: %v", err)
-	}
-
 	opts, showHelp, err := parseArgs(os.Args[1:])
 	if err != nil {
 		exitErr("%v", err)
@@ -70,6 +76,15 @@ func main() {
 	if showHelp {
 		printHelp()
 		return
+	}
+	if opts.Version {
+		printVersion()
+		return
+	}
+
+	cfg, err := loadConfig()
+	if err != nil {
+		exitErr("設定読み込みエラー: %v", err)
 	}
 
 	entries, err := loadEntries(cfg.DataFile)
@@ -82,12 +97,10 @@ func main() {
 		if err := addOrUpdateEntry(&entries, opts, cfg); err != nil {
 			exitErr("%v", err)
 		}
-		backupPath, err := saveWithAutomaticBackup(cfg.DataFile, entries)
-		if err != nil {
+		if err := saveWithAutomaticBackup(cfg.DataFile, entries); err != nil {
 			exitErr("保存エラー: %v", err)
 		}
 		fmt.Println("保存しました。")
-		fmt.Printf("自動バックアップ: %s\n", backupPath)
 
 	case opts.Delete:
 		var deleted bool
@@ -95,31 +108,41 @@ func main() {
 		if !deleted {
 			exitErr("ID %d のデータは見つかりませんでした", opts.DeleteID)
 		}
-		backupPath, err := saveWithAutomaticBackup(cfg.DataFile, entries)
-		if err != nil {
+		if err := saveWithAutomaticBackup(cfg.DataFile, entries); err != nil {
 			exitErr("保存エラー: %v", err)
 		}
 		fmt.Printf("ID %d を削除しました。\n", opts.DeleteID)
-		fmt.Printf("自動バックアップ: %s\n", backupPath)
 
 	case opts.Backup:
-		path, err := backupEntries(entries, cfg.DataFile, opts.BackupPath)
-		if err != nil {
+		if _, err := backupEntries(entries, cfg.DataFile, opts.BackupPath); err != nil {
 			exitErr("バックアップエラー: %v", err)
 		}
-		fmt.Printf("バックアップを保存しました: %s\n", path)
 
 	case opts.Restore:
+		var restorePath string
+		if strings.TrimSpace(opts.RestorePath) == "" {
+			restorePath, err = promptRestorePath(cfg.DataFile, os.Stdin, os.Stdout)
+			if err != nil {
+				exitErr("復元エラー: %v", err)
+			}
+			if restorePath == "" {
+				fmt.Println("復元を中止しました。")
+				break
+			}
+		} else {
+			restorePath, err = resolveRestorePath(cfg.DataFile, opts.RestorePath)
+			if err != nil {
+				exitErr("復元エラー: %v", err)
+			}
+		}
 		if err := confirmRestore(os.Stdin, os.Stdout); err != nil {
 			exitErr("復元エラー: %v", err)
 		}
-		safetyBackup, restoredCount, err := restoreEntries(cfg.DataFile, entries, opts.RestorePath)
+		_, _, err = restoreEntries(cfg.DataFile, entries, restorePath)
 		if err != nil {
 			exitErr("復元エラー: %v", err)
 		}
-		fmt.Printf("復元しました: %s\n", opts.RestorePath)
-		fmt.Printf("復元前バックアップ: %s\n", safetyBackup)
-		fmt.Printf("復元レコード数: %d\n", restoredCount)
+		fmt.Println("復元しました。")
 
 	case opts.InteractiveSearch:
 		if err := runInteractiveSearch(entries, opts); err != nil {
@@ -148,6 +171,9 @@ func parseArgs(args []string) (Options, bool, error) {
 		switch arg {
 		case "-h", "--help":
 			return opts, true, nil
+
+		case "-v", "--version":
+			opts.Version = true
 
 		case "-r":
 			opts.Reverse = true
@@ -193,12 +219,11 @@ func parseArgs(args []string) (Options, bool, error) {
 			}
 
 		case "-R", "--restore":
-			if i+1 >= len(args) {
-				return opts, false, errors.New("-R にはバックアップファイルのパスが必要です")
-			}
 			opts.Restore = true
-			opts.RestorePath = args[i+1]
-			i++
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				opts.RestorePath = args[i+1]
+				i++
+			}
 
 		case "-a":
 			if opts.Delete || opts.List || opts.Search || opts.InteractiveSearch || opts.Backup || opts.Restore {
@@ -274,16 +299,15 @@ func parseArgs(args []string) (Options, bool, error) {
 	if opts.Backup && (opts.Add || opts.Delete) {
 		return opts, false, errors.New("-b は -a や -d と同時に使えません")
 	}
+	if opts.Version && (opts.Add || opts.Delete || opts.List || opts.Search || opts.InteractiveSearch || opts.Backup || opts.Restore || opts.ListMonth != "" || opts.Reverse || opts.Numbered || opts.ListLimitSet) {
+		return opts, false, errors.New("-v は単独で使ってください")
+	}
 	if opts.Restore && (opts.List || opts.Search || opts.InteractiveSearch || opts.ListMonth != "" || opts.Reverse || opts.Numbered) {
 		return opts, false, errors.New("-R は一覧・検索系のオプションと同時に使えません")
 	}
 	if opts.Restore && (opts.Add || opts.Delete || opts.Backup) {
 		return opts, false, errors.New("-R は -a、-d、-b と同時に使えません")
 	}
-	if opts.Restore && strings.TrimSpace(opts.RestorePath) == "" {
-		return opts, false, errors.New("復元元のバックアップファイルが空です")
-	}
-
 	return opts, false, nil
 }
 
@@ -346,6 +370,9 @@ func printHelp() {
   diary
       ヘルプを表示
 
+  diary -v
+      バージョンを表示
+
   diary -l [件数]
       直近の記録を古いもの順で表示
       件数省略時は 7
@@ -364,8 +391,9 @@ func printHelp() {
       その場でバックアップを作成
       保存先省略時はOSごとのローカル保存先に保存
 
-  diary -R バックアップファイル
-      バックアップファイルから復元
+  diary -R [バックアップファイル]
+      引数省略時はバックアップ一覧を表示して番号入力で復元
+      バックアップファイル指定でも復元可能
       復元前のデータは自動でバックアップ
       実行前に "diary" の入力確認あり
 
@@ -394,6 +422,10 @@ func printHelp() {
   data_file = "C:\\Users\\yourname\\diary\\diary.jsonl"
   max_len = 200
 `, appVersion)
+}
+
+func printVersion() {
+	fmt.Printf("diary v%s\n", appVersion)
 }
 
 func loadEntries(path string) ([]Entry, error) {
@@ -476,17 +508,16 @@ func saveEntries(path string, entries []Entry) error {
 	return writeEntriesFile(path, entries)
 }
 
-func saveWithAutomaticBackup(dataFile string, entries []Entry) (string, error) {
+func saveWithAutomaticBackup(dataFile string, entries []Entry) error {
 	if err := saveEntries(dataFile, entries); err != nil {
-		return "", err
+		return err
 	}
 
-	backupPath, err := backupEntries(entries, dataFile, "")
-	if err != nil {
-		return "", fmt.Errorf("保存は完了しましたが自動バックアップに失敗しました: %w", err)
+	if _, err := backupEntries(entries, dataFile, ""); err != nil {
+		return fmt.Errorf("保存は完了しましたが自動バックアップに失敗しました: %w", err)
 	}
 
-	return backupPath, nil
+	return nil
 }
 
 func confirmRestore(in *os.File, out *os.File) error {
@@ -502,6 +533,85 @@ func confirmRestore(in *os.File, out *os.File) error {
 		return errors.New(`確認に失敗したため復元を中止しました`)
 	}
 	return nil
+}
+
+func printBackupList(backups []BackupInfo, out io.Writer) {
+	if len(backups) == 0 {
+		fmt.Fprintln(out, "バックアップはありません。")
+		return
+	}
+
+	fmt.Fprintln(out, "バックアップ一覧:")
+	for _, backup := range backups {
+		fmt.Fprintf(out, "%d  %s  %d件\n", backup.Index, backup.Timestamp.Format("2006-01-02 15:04:05"), backup.Count)
+	}
+}
+
+func promptRestorePath(dataFile string, in io.Reader, out io.Writer) (string, error) {
+	backups, err := listBackupInfos(dataFile)
+	if err != nil {
+		return "", err
+	}
+	printBackupList(backups, out)
+	if len(backups) == 0 {
+		return "", nil
+	}
+
+	fmt.Fprintln(out, "復元する番号を入力してください。空行で中止します。")
+	reader := bufio.NewReader(in)
+	for {
+		fmt.Fprint(out, "restore> ")
+		line, err := reader.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return "", fmt.Errorf("番号入力を読み取れませんでした: %w", err)
+		}
+
+		input := strings.TrimSpace(line)
+		if input == "" {
+			return "", nil
+		}
+		if !isPositiveInt(input) {
+			fmt.Fprintf(out, "1 から %d の番号を入力してください。\n", len(backups))
+			if errors.Is(err, io.EOF) {
+				return "", nil
+			}
+			continue
+		}
+
+		index, _ := strconv.Atoi(input)
+		if index < 1 || index > len(backups) {
+			fmt.Fprintf(out, "1 から %d の番号を入力してください。\n", len(backups))
+			if errors.Is(err, io.EOF) {
+				return "", nil
+			}
+			continue
+		}
+		return backups[index-1].Path, nil
+	}
+}
+
+func resolveRestorePath(dataFile, restoreArg string) (string, error) {
+	restoreArg = strings.TrimSpace(restoreArg)
+	if restoreArg == "" {
+		return "", errors.New("復元元が指定されていません")
+	}
+	if !isPositiveInt(restoreArg) {
+		return filepath.Clean(restoreArg), nil
+	}
+
+	backups, err := listBackupInfos(dataFile)
+	if err != nil {
+		return "", err
+	}
+	if len(backups) == 0 {
+		return "", errors.New("復元できるバックアップがありません")
+	}
+
+	index, _ := strconv.Atoi(restoreArg)
+	if index < 1 || index > len(backups) {
+		return "", fmt.Errorf("バックアップ番号は 1 から %d の範囲で指定してください", len(backups))
+	}
+	return backups[index-1].Path, nil
 }
 
 func restoreEntries(dataFile string, currentEntries []Entry, restorePath string) (string, int, error) {
@@ -528,6 +638,49 @@ func restoreEntries(dataFile string, currentEntries []Entry, restorePath string)
 	}
 
 	return safetyBackup, len(restoredEntries), nil
+}
+
+func listBackupInfos(dataFile string) ([]BackupInfo, error) {
+	dir, err := defaultBackupDirPath()
+	if err != nil {
+		return nil, err
+	}
+
+	matches, err := filepath.Glob(filepath.Join(dir, backupFileGlob(dataFile)))
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) == 0 {
+		return nil, nil
+	}
+
+	backups := make([]BackupInfo, 0, len(matches))
+	for _, path := range matches {
+		entries, err := loadEntries(path)
+		if err != nil {
+			return nil, err
+		}
+		timestamp, err := backupTimestamp(path)
+		if err != nil {
+			return nil, err
+		}
+		backups = append(backups, BackupInfo{
+			Path:      path,
+			Timestamp: timestamp,
+			Count:     len(entries),
+		})
+	}
+
+	sort.Slice(backups, func(i, j int) bool {
+		if backups[i].Timestamp.Equal(backups[j].Timestamp) {
+			return backups[i].Path > backups[j].Path
+		}
+		return backups[i].Timestamp.After(backups[j].Timestamp)
+	})
+	for i := range backups {
+		backups[i].Index = i + 1
+	}
+	return backups, nil
 }
 
 func runList(entries []Entry, opts Options) {
@@ -684,7 +837,73 @@ func backupEntries(entries []Entry, dataFile, backupPath string) (string, error)
 	if err := writeBackupFile(target, copied); err != nil {
 		return "", err
 	}
+	if err := pruneBackupHistory(dataFile, target, maxBackupHistory); err != nil {
+		return "", err
+	}
 	return target, nil
+}
+
+func pruneBackupHistory(dataFile, savedPath string, keep int) error {
+	if keep <= 0 {
+		return nil
+	}
+
+	pattern := filepath.Join(filepath.Dir(savedPath), backupFileGlob(dataFile))
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return err
+	}
+	if len(matches) <= keep {
+		return nil
+	}
+
+	sort.Strings(matches)
+	toRemove := len(matches) - keep
+	for _, oldPath := range matches {
+		if toRemove == 0 {
+			break
+		}
+		if oldPath == savedPath {
+			continue
+		}
+		if err := os.Remove(oldPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		toRemove--
+	}
+	return nil
+}
+
+func backupFileGlob(dataFile string) string {
+	baseName := strings.TrimSuffix(filepath.Base(dataFile), filepath.Ext(dataFile))
+	if baseName == "" {
+		baseName = "diary"
+	}
+	return fmt.Sprintf("%s-backup-*.jsonl", baseName)
+}
+
+func backupTimestamp(path string) (time.Time, error) {
+	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	idx := strings.LastIndex(name, "-backup-")
+	if idx < 0 {
+		info, err := os.Stat(path)
+		if err != nil {
+			return time.Time{}, err
+		}
+		return info.ModTime(), nil
+	}
+
+	stamp := name[idx+len("-backup-"):]
+	timestamp, err := time.ParseInLocation(backupTimestampLayout, stamp, time.Local)
+	if err == nil {
+		return timestamp, nil
+	}
+
+	info, statErr := os.Stat(path)
+	if statErr != nil {
+		return time.Time{}, err
+	}
+	return info.ModTime(), nil
 }
 
 func resolveBackupPath(dataFile, backupPath string) (string, error) {
@@ -692,7 +911,7 @@ func resolveBackupPath(dataFile, backupPath string) (string, error) {
 	if baseName == "" {
 		baseName = "diary"
 	}
-	fileName := fmt.Sprintf("%s-backup-%s.jsonl", baseName, time.Now().Format("20060102-150405-000000000"))
+	fileName := fmt.Sprintf("%s-backup-%s.jsonl", baseName, time.Now().Format(backupTimestampLayout))
 
 	if strings.TrimSpace(backupPath) == "" {
 		dir, err := defaultBackupDirPath()

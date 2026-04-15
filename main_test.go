@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -93,6 +96,39 @@ func TestParseArgsRestore(t *testing.T) {
 	}
 }
 
+func TestParseArgsRestoreWithoutArgument(t *testing.T) {
+	opts, showHelp, err := parseArgs([]string{"-R"})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+	if showHelp {
+		t.Fatal("expected showHelp=false")
+	}
+	if !opts.Restore || opts.RestorePath != "" {
+		t.Fatalf("unexpected restore opts: %+v", opts)
+	}
+}
+
+func TestParseArgsVersion(t *testing.T) {
+	opts, showHelp, err := parseArgs([]string{"-v"})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+	if showHelp {
+		t.Fatal("expected showHelp=false")
+	}
+	if !opts.Version {
+		t.Fatalf("expected version flag to be set: %+v", opts)
+	}
+}
+
+func TestParseArgsVersionRejectsMixedOptions(t *testing.T) {
+	_, _, err := parseArgs([]string{"-v", "-l"})
+	if err == nil {
+		t.Fatal("expected parseArgs to reject mixed version options")
+	}
+}
+
 func TestRestoreEntriesRestoresBackupAndCreatesSafetyBackup(t *testing.T) {
 	dir := t.TempDir()
 	dataFile := filepath.Join(dir, "diary.jsonl")
@@ -133,6 +169,212 @@ func TestRestoreEntriesRestoresBackupAndCreatesSafetyBackup(t *testing.T) {
 	}
 	if len(got) != len(restore) || got[0].ID != 2 || got[1].ID != 3 {
 		t.Fatalf("unexpected restored entries: %+v", got)
+	}
+}
+
+func TestBackupEntriesPrunesOldBackupsToLimit(t *testing.T) {
+	dir := t.TempDir()
+	dataFile := filepath.Join(dir, "diary.jsonl")
+	backupDir := filepath.Join(dir, "backups")
+	entries := []Entry{{ID: 1, Date: "2026-04-15", Text: "note"}}
+
+	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll error: %v", err)
+	}
+
+	for i := 0; i < 30; i++ {
+		name := fmt.Sprintf("diary-backup-20200101-000000-%09d.jsonl", i)
+		path := filepath.Join(backupDir, name)
+		if err := writeBackupFile(path, entries); err != nil {
+			t.Fatalf("writeBackupFile error: %v", err)
+		}
+	}
+
+	newPath, err := backupEntries(entries, dataFile, backupDir)
+	if err != nil {
+		t.Fatalf("backupEntries returned error: %v", err)
+	}
+
+	matches, err := filepath.Glob(filepath.Join(backupDir, "diary-backup-*.jsonl"))
+	if err != nil {
+		t.Fatalf("Glob returned error: %v", err)
+	}
+	if len(matches) != maxBackupHistory {
+		t.Fatalf("unexpected backup count: got %d want %d", len(matches), maxBackupHistory)
+	}
+	if _, err := os.Stat(newPath); err != nil {
+		t.Fatalf("new backup missing: %v", err)
+	}
+	oldest := filepath.Join(backupDir, "diary-backup-20200101-000000-000000000.jsonl")
+	if _, err := os.Stat(oldest); !os.IsNotExist(err) {
+		t.Fatalf("expected oldest backup to be pruned, stat err=%v", err)
+	}
+}
+
+func TestListBackupInfosReturnsNewestFirstWithCounts(t *testing.T) {
+	dir := t.TempDir()
+	backupDir := filepath.Join(dir, "localapp", "diary", "backups")
+	dataFile := filepath.Join(dir, "diary.jsonl")
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+	t.Setenv("LOCALAPPDATA", filepath.Join(dir, "localapp"))
+
+	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll error: %v", err)
+	}
+
+	olderPath := filepath.Join(backupDir, "diary-backup-20260415-101500-000000000.jsonl")
+	newerPath := filepath.Join(backupDir, "diary-backup-20260415-121500-000000000.jsonl")
+	if err := writeBackupFile(olderPath, []Entry{{ID: 1, Date: "2026-04-01", Text: "a"}}); err != nil {
+		t.Fatalf("writeBackupFile older error: %v", err)
+	}
+	if err := writeBackupFile(newerPath, []Entry{
+		{ID: 2, Date: "2026-04-02", Text: "b"},
+		{ID: 3, Date: "2026-04-03", Text: "c"},
+	}); err != nil {
+		t.Fatalf("writeBackupFile newer error: %v", err)
+	}
+
+	backups, err := listBackupInfos(dataFile)
+	if err != nil {
+		t.Fatalf("listBackupInfos returned error: %v", err)
+	}
+	if len(backups) != 2 {
+		t.Fatalf("unexpected backup count: got %d want 2", len(backups))
+	}
+	if backups[0].Path != newerPath || backups[0].Count != 2 || backups[0].Index != 1 {
+		t.Fatalf("unexpected newest backup: %+v", backups[0])
+	}
+	if backups[1].Path != olderPath || backups[1].Count != 1 || backups[1].Index != 2 {
+		t.Fatalf("unexpected older backup: %+v", backups[1])
+	}
+}
+
+func TestResolveRestorePathUsesBackupIndex(t *testing.T) {
+	dir := t.TempDir()
+	backupDir := filepath.Join(dir, "localapp", "diary", "backups")
+	dataFile := filepath.Join(dir, "diary.jsonl")
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+	t.Setenv("LOCALAPPDATA", filepath.Join(dir, "localapp"))
+
+	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll error: %v", err)
+	}
+
+	olderPath := filepath.Join(backupDir, "diary-backup-20260415-101500-000000000.jsonl")
+	newerPath := filepath.Join(backupDir, "diary-backup-20260415-121500-000000000.jsonl")
+	if err := writeBackupFile(olderPath, []Entry{{ID: 1, Date: "2026-04-01", Text: "a"}}); err != nil {
+		t.Fatalf("writeBackupFile older error: %v", err)
+	}
+	if err := writeBackupFile(newerPath, []Entry{{ID: 2, Date: "2026-04-02", Text: "b"}}); err != nil {
+		t.Fatalf("writeBackupFile newer error: %v", err)
+	}
+
+	got, err := resolveRestorePath(dataFile, "2")
+	if err != nil {
+		t.Fatalf("resolveRestorePath returned error: %v", err)
+	}
+	if got != olderPath {
+		t.Fatalf("unexpected restore path: got %q want %q", got, olderPath)
+	}
+}
+
+func TestPrintBackupListShowsNumberTimestampAndCount(t *testing.T) {
+	dir := t.TempDir()
+	backupDir := filepath.Join(dir, "localapp", "diary", "backups")
+	dataFile := filepath.Join(dir, "diary.jsonl")
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+	t.Setenv("LOCALAPPDATA", filepath.Join(dir, "localapp"))
+
+	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll error: %v", err)
+	}
+
+	path := filepath.Join(backupDir, "diary-backup-20260415-121500-000000000.jsonl")
+	if err := writeBackupFile(path, []Entry{
+		{ID: 1, Date: "2026-04-01", Text: "a"},
+		{ID: 2, Date: "2026-04-02", Text: "b"},
+	}); err != nil {
+		t.Fatalf("writeBackupFile error: %v", err)
+	}
+
+	backups, err := listBackupInfos(dataFile)
+	if err != nil {
+		t.Fatalf("listBackupInfos returned error: %v", err)
+	}
+
+	var buf bytes.Buffer
+	printBackupList(backups, &buf)
+
+	got := buf.String()
+	if !strings.Contains(got, "1  2026-04-15 12:15:00  2件") {
+		t.Fatalf("backup list missing expected line: %q", got)
+	}
+}
+
+func TestPromptRestorePathSelectsNumberWithoutReturningToShell(t *testing.T) {
+	dir := t.TempDir()
+	backupDir := filepath.Join(dir, "localapp", "diary", "backups")
+	dataFile := filepath.Join(dir, "diary.jsonl")
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+	t.Setenv("LOCALAPPDATA", filepath.Join(dir, "localapp"))
+
+	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll error: %v", err)
+	}
+
+	olderPath := filepath.Join(backupDir, "diary-backup-20260415-101500-000000000.jsonl")
+	newerPath := filepath.Join(backupDir, "diary-backup-20260415-121500-000000000.jsonl")
+	if err := writeBackupFile(olderPath, []Entry{{ID: 1, Date: "2026-04-01", Text: "a"}}); err != nil {
+		t.Fatalf("writeBackupFile older error: %v", err)
+	}
+	if err := writeBackupFile(newerPath, []Entry{{ID: 2, Date: "2026-04-02", Text: "b"}}); err != nil {
+		t.Fatalf("writeBackupFile newer error: %v", err)
+	}
+
+	var out bytes.Buffer
+	got, err := promptRestorePath(dataFile, strings.NewReader("2\n"), &out)
+	if err != nil {
+		t.Fatalf("promptRestorePath returned error: %v", err)
+	}
+	if got != olderPath {
+		t.Fatalf("unexpected restore path: got %q want %q", got, olderPath)
+	}
+	if !strings.Contains(out.String(), "restore> ") {
+		t.Fatalf("prompt output missing restore prompt: %q", out.String())
+	}
+}
+
+func TestPromptRestorePathRetriesUntilValidNumber(t *testing.T) {
+	dir := t.TempDir()
+	backupDir := filepath.Join(dir, "localapp", "diary", "backups")
+	dataFile := filepath.Join(dir, "diary.jsonl")
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+	t.Setenv("LOCALAPPDATA", filepath.Join(dir, "localapp"))
+
+	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll error: %v", err)
+	}
+
+	path := filepath.Join(backupDir, "diary-backup-20260415-121500-000000000.jsonl")
+	if err := writeBackupFile(path, []Entry{{ID: 1, Date: "2026-04-02", Text: "b"}}); err != nil {
+		t.Fatalf("writeBackupFile error: %v", err)
+	}
+
+	var out bytes.Buffer
+	got, err := promptRestorePath(dataFile, strings.NewReader("x\n1\n"), &out)
+	if err != nil {
+		t.Fatalf("promptRestorePath returned error: %v", err)
+	}
+	if got != path {
+		t.Fatalf("unexpected restore path: got %q want %q", got, path)
+	}
+	if !strings.Contains(out.String(), "1 から 1 の番号を入力してください。") {
+		t.Fatalf("prompt output missing retry guidance: %q", out.String())
 	}
 }
 
