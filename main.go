@@ -20,7 +20,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-const appVersion = "0.9.2"
+const appVersion = "0.9.3"
 const maxBackupHistory = 10
 const backupTimestampLayout = "20060102-150405-000000000"
 
@@ -61,6 +61,7 @@ type Options struct {
 	Version           bool
 
 	Add     bool
+	Append  bool
 	AddDate string
 	AddText string
 
@@ -93,7 +94,7 @@ func main() {
 	}
 
 	switch {
-	case opts.Add:
+	case opts.Add || opts.Append:
 		if err := addOrUpdateEntry(&entries, opts, cfg); err != nil {
 			exitErr("%v", err)
 		}
@@ -226,8 +227,8 @@ func parseArgs(args []string) (Options, bool, error) {
 			}
 
 		case "-a":
-			if opts.Delete || opts.List || opts.Search || opts.InteractiveSearch || opts.Backup || opts.Restore {
-				return opts, false, errors.New("-a は一覧・検索・削除・バックアップ・復元系のオプションと同時に使えません")
+			if opts.Append || opts.Delete || opts.List || opts.Search || opts.InteractiveSearch || opts.Backup || opts.Restore {
+				return opts, false, errors.New("-a は -A、一覧・検索・削除・バックアップ・復元系のオプションと同時に使えません")
 			}
 			opts.Add = true
 
@@ -255,9 +256,39 @@ func parseArgs(args []string) (Options, bool, error) {
 			}
 			return opts, false, nil
 
+		case "-A":
+			if opts.Add || opts.Delete || opts.List || opts.Search || opts.InteractiveSearch || opts.Backup || opts.Restore {
+				return opts, false, errors.New("-A は -a、一覧・検索・削除・バックアップ・復元系のオプションと同時に使えません")
+			}
+			opts.Append = true
+
+			rest := args[i+1:]
+			if len(rest) == 0 {
+				text, err := promptText()
+				if err != nil {
+					return opts, false, err
+				}
+				opts.AddDate = todayString()
+				opts.AddText = text
+				return opts, false, nil
+			}
+
+			if len(rest) >= 2 && isDate(rest[0]) {
+				opts.AddDate = rest[0]
+				opts.AddText = strings.Join(rest[1:], " ")
+			} else {
+				opts.AddDate = todayString()
+				opts.AddText = strings.Join(rest, " ")
+			}
+
+			if strings.TrimSpace(opts.AddText) == "" {
+				return opts, false, errors.New("追記する本文が空です")
+			}
+			return opts, false, nil
+
 		case "-d":
-			if opts.Add || opts.List || opts.Search || opts.InteractiveSearch || opts.Backup || opts.Restore {
-				return opts, false, errors.New("-d は追加・一覧・検索・バックアップ・復元系のオプションと同時に使えません")
+			if opts.Add || opts.Append || opts.List || opts.Search || opts.InteractiveSearch || opts.Backup || opts.Restore {
+				return opts, false, errors.New("-d は追加・追記・一覧・検索・バックアップ・復元系のオプションと同時に使えません")
 			}
 			opts.Delete = true
 
@@ -296,17 +327,17 @@ func parseArgs(args []string) (Options, bool, error) {
 	if opts.Backup && (opts.List || opts.Search || opts.InteractiveSearch || opts.ListMonth != "" || opts.Reverse || opts.Numbered) {
 		return opts, false, errors.New("-b は一覧・検索系のオプションと同時に使えません")
 	}
-	if opts.Backup && (opts.Add || opts.Delete) {
-		return opts, false, errors.New("-b は -a や -d と同時に使えません")
+	if opts.Backup && (opts.Add || opts.Append || opts.Delete) {
+		return opts, false, errors.New("-b は -a、-A、-d と同時に使えません")
 	}
-	if opts.Version && (opts.Add || opts.Delete || opts.List || opts.Search || opts.InteractiveSearch || opts.Backup || opts.Restore || opts.ListMonth != "" || opts.Reverse || opts.Numbered || opts.ListLimitSet) {
+	if opts.Version && (opts.Add || opts.Append || opts.Delete || opts.List || opts.Search || opts.InteractiveSearch || opts.Backup || opts.Restore || opts.ListMonth != "" || opts.Reverse || opts.Numbered || opts.ListLimitSet) {
 		return opts, false, errors.New("-v は単独で使ってください")
 	}
 	if opts.Restore && (opts.List || opts.Search || opts.InteractiveSearch || opts.ListMonth != "" || opts.Reverse || opts.Numbered) {
 		return opts, false, errors.New("-R は一覧・検索系のオプションと同時に使えません")
 	}
-	if opts.Restore && (opts.Add || opts.Delete || opts.Backup) {
-		return opts, false, errors.New("-R は -a、-d、-b と同時に使えません")
+	if opts.Restore && (opts.Add || opts.Append || opts.Delete || opts.Backup) {
+		return opts, false, errors.New("-R は -a、-A、-d、-b と同時に使えません")
 	}
 	return opts, false, nil
 }
@@ -330,6 +361,12 @@ func addOrUpdateEntry(entries *[]Entry, opts Options, cfg Config) error {
 
 	for i := range es {
 		if es[i].Date == date {
+			if opts.Append && strings.TrimSpace(es[i].Text) != "" {
+				text = es[i].Text + " / " + text
+			}
+			if utf8Len(text) > cfg.MaxLen {
+				return fmt.Errorf("本文は %d 文字以内にしてください", cfg.MaxLen)
+			}
 			es[i].Text = text
 			es[i].UpdatedAt = now
 			*entries = es
@@ -411,6 +448,14 @@ func printHelp() {
 
   diary -a YYYY-MM-DD "本文"
       指定日で追加または上書き
+
+  diary -A "本文"
+      今日の日付で既存本文の末尾に " / 本文" を追記
+      未登録ならそのまま追加
+
+  diary -A YYYY-MM-DD "本文"
+      指定日で既存本文の末尾に " / 本文" を追記
+      未登録ならそのまま追加
 
   diary -d ID
       指定したシリアル番号の記録を削除

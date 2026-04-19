@@ -4,15 +4,16 @@ A simple one-line diary application for the command line.
 
 [日本語版 README](README.ja.md)
 
-Current version: `0.9.2`
+Current version: `0.9.3`
 
 `diary` is a lightweight CLI tool written in Go for keeping short daily notes in JSONL format.  
 Each entry is assigned a serial ID, only one entry is stored per date, and existing entries can be updated or deleted easily.
 
 ---
 
-## What's New in 0.9.2
+## What's New in 0.9.3
 
+- Added append mode for existing entries with `-A`
 - Added listing by year and month with `-m YYYY-MM`
 - Added case-insensitive text search with `-s`
 - Added interactive search mode with `-i`
@@ -30,6 +31,7 @@ Each entry is assigned a serial ID, only one entry is stored per date, and exist
 - One entry per date
 - Automatic serial ID assignment
 - Update an existing entry by writing to the same date
+- Append to an existing entry for the same date
 - List recent entries
 - List entries for a specific month
 - Search entries case-insensitively
@@ -124,6 +126,20 @@ diary -a "A quiet day."
 
 ```bash
 diary -a 2026-03-25 "Went for a walk."
+```
+
+### Append to today's entry
+
+```bash
+diary -A "Play"
+```
+
+If an entry already exists, the result becomes `"existing text / Play"`. If no entry exists yet, it simply saves `Play`.
+
+### Append to an entry for a specific date
+
+```bash
+diary -A 2026-03-25 "Play"
 ```
 
 ### List the most recent 7 entries in oldest-first order

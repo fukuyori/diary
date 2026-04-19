@@ -129,6 +129,89 @@ func TestParseArgsVersionRejectsMixedOptions(t *testing.T) {
 	}
 }
 
+func TestParseArgsAppendForToday(t *testing.T) {
+	opts, showHelp, err := parseArgs([]string{"-A", "Play"})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+	if showHelp {
+		t.Fatal("expected showHelp=false")
+	}
+	if !opts.Append {
+		t.Fatalf("expected append flag to be set: %+v", opts)
+	}
+	if opts.AddDate != todayString() {
+		t.Fatalf("unexpected append date: got %q want %q", opts.AddDate, todayString())
+	}
+	if opts.AddText != "Play" {
+		t.Fatalf("unexpected append text: %q", opts.AddText)
+	}
+}
+
+func TestParseArgsAppendRejectsMixedOptions(t *testing.T) {
+	_, _, err := parseArgs([]string{"-l", "-A", "Play"})
+	if err == nil {
+		t.Fatal("expected parseArgs to reject mixed append options")
+	}
+}
+
+func TestAddOrUpdateEntryAppendExistingEntry(t *testing.T) {
+	entries := []Entry{
+		{
+			ID:        1,
+			Date:      "2026-04-19",
+			Text:      "work",
+			CreatedAt: "2026-04-19T09:00:00+09:00",
+			UpdatedAt: "2026-04-19T09:00:00+09:00",
+		},
+	}
+
+	err := addOrUpdateEntry(&entries, Options{
+		Append:  true,
+		AddDate: "2026-04-19",
+		AddText: "Play",
+	}, Config{MaxLen: 200})
+	if err != nil {
+		t.Fatalf("addOrUpdateEntry returned error: %v", err)
+	}
+
+	if len(entries) != 1 {
+		t.Fatalf("unexpected entry count: got %d want 1", len(entries))
+	}
+	if entries[0].Text != "work / Play" {
+		t.Fatalf("unexpected appended text: %q", entries[0].Text)
+	}
+	if entries[0].CreatedAt != "2026-04-19T09:00:00+09:00" {
+		t.Fatalf("created_at should be preserved: %q", entries[0].CreatedAt)
+	}
+	if entries[0].UpdatedAt == "2026-04-19T09:00:00+09:00" {
+		t.Fatal("updated_at should be refreshed")
+	}
+}
+
+func TestAddOrUpdateEntryAppendCreatesEntryWhenMissing(t *testing.T) {
+	var entries []Entry
+
+	err := addOrUpdateEntry(&entries, Options{
+		Append:  true,
+		AddDate: "2026-04-19",
+		AddText: "Play",
+	}, Config{MaxLen: 200})
+	if err != nil {
+		t.Fatalf("addOrUpdateEntry returned error: %v", err)
+	}
+
+	if len(entries) != 1 {
+		t.Fatalf("unexpected entry count: got %d want 1", len(entries))
+	}
+	if entries[0].Text != "Play" {
+		t.Fatalf("unexpected created text: %q", entries[0].Text)
+	}
+	if entries[0].Date != "2026-04-19" {
+		t.Fatalf("unexpected created date: %q", entries[0].Date)
+	}
+}
+
 func TestRestoreEntriesRestoresBackupAndCreatesSafetyBackup(t *testing.T) {
 	dir := t.TempDir()
 	dataFile := filepath.Join(dir, "diary.jsonl")
