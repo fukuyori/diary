@@ -6,6 +6,8 @@ A simple one-line diary application for the command line.
 
 Current version: `0.9.3`
 
+[Changelog](CHANGELOG.md)
+
 `diary` is a lightweight CLI tool written in Go for keeping short daily notes in JSONL format.  
 Each entry is assigned a serial ID, only one entry is stored per date, and existing entries can be updated or deleted easily.
 
@@ -14,13 +16,7 @@ Each entry is assigned a serial ID, only one entry is stored per date, and exist
 ## What's New in 0.9.3
 
 - Added append mode for existing entries with `-A`
-- Added listing by year and month with `-m YYYY-MM`
-- Added case-insensitive text search with `-s`
-- Added interactive search mode with `-i`
-- Added automatic backup on add, update, and delete
-- Added manual backup with `-b`
-- Added restore from backup with `-R`
-- Added restore confirmation that requires typing `diary`
+- Updated the help text and README files to describe `-A`
 
 ---
 
@@ -256,6 +252,8 @@ diary -d 3
 | `diary -r -n -l [n]`         | List recent entries with serial IDs in newest-first order |
 | `diary -a "text"`            | Add or update today's entry                               |
 | `diary -a YYYY-MM-DD "text"` | Add or update an entry for a specific date                |
+| `diary -A "text"`            | Append to today's entry, or create it if missing          |
+| `diary -A YYYY-MM-DD "text"` | Append to an entry for a specific date, or create it      |
 | `diary -d ID`                | Delete an entry by serial ID                              |
 | `diary -b [path]`            | Create a backup immediately                               |
 | `diary -R`                   | List available backups and prompt for a restore number    |
