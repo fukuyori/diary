@@ -9,6 +9,20 @@ import (
 	"testing"
 )
 
+func testDefaultBackupDir(t *testing.T, dir string) string {
+	t.Helper()
+
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+	t.Setenv("LOCALAPPDATA", filepath.Join(dir, "localapp"))
+
+	backupDir, err := defaultBackupDirPath()
+	if err != nil {
+		t.Fatalf("defaultBackupDirPath returned error: %v", err)
+	}
+	return backupDir
+}
+
 func TestCollectEntriesSearchIsCaseInsensitive(t *testing.T) {
 	entries := []Entry{
 		{ID: 1, Date: "2026-03-01", Text: "Went for a Walk"},
@@ -129,6 +143,26 @@ func TestParseArgsVersionRejectsMixedOptions(t *testing.T) {
 	}
 }
 
+func TestParseArgsDeletePart(t *testing.T) {
+	opts, showHelp, err := parseArgs([]string{"-d", "101", "2"})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+	if showHelp {
+		t.Fatal("expected showHelp=false")
+	}
+	if !opts.Delete || opts.DeleteID != 101 || opts.DeletePart != 2 {
+		t.Fatalf("unexpected delete opts: %+v", opts)
+	}
+}
+
+func TestParseArgsDeletePartRejectsInvalidPart(t *testing.T) {
+	_, _, err := parseArgs([]string{"-d", "101", "x"})
+	if err == nil {
+		t.Fatal("expected parseArgs to reject invalid delete part")
+	}
+}
+
 func TestParseArgsAppendForToday(t *testing.T) {
 	opts, showHelp, err := parseArgs([]string{"-A", "Play"})
 	if err != nil {
@@ -209,6 +243,47 @@ func TestAddOrUpdateEntryAppendCreatesEntryWhenMissing(t *testing.T) {
 	}
 	if entries[0].Date != "2026-04-19" {
 		t.Fatalf("unexpected created date: %q", entries[0].Date)
+	}
+}
+
+func TestDeletePartByIDRemovesSlashSeparatedPart(t *testing.T) {
+	entries := []Entry{
+		{
+			ID:        101,
+			Date:      "2026-04-19",
+			Text:      "a / b / c",
+			CreatedAt: "2026-04-19T09:00:00+09:00",
+			UpdatedAt: "2026-04-19T09:00:00+09:00",
+		},
+	}
+
+	got, found, err := deletePartByID(entries, 101, 2)
+	if err != nil {
+		t.Fatalf("deletePartByID returned error: %v", err)
+	}
+	if !found {
+		t.Fatal("expected entry to be found")
+	}
+	if got[0].Text != "a / c" {
+		t.Fatalf("unexpected text: %q", got[0].Text)
+	}
+	if got[0].UpdatedAt == "2026-04-19T09:00:00+09:00" {
+		t.Fatal("updated_at should be refreshed")
+	}
+}
+
+func TestDeletePartByIDRejectsOutOfRangePart(t *testing.T) {
+	entries := []Entry{{ID: 101, Date: "2026-04-19", Text: "a / b / c"}}
+
+	got, found, err := deletePartByID(entries, 101, 4)
+	if err == nil {
+		t.Fatal("expected deletePartByID to reject out-of-range part")
+	}
+	if !found {
+		t.Fatal("expected entry to be found")
+	}
+	if got[0].Text != "a / b / c" {
+		t.Fatalf("text should be unchanged: %q", got[0].Text)
 	}
 }
 
@@ -296,11 +371,8 @@ func TestBackupEntriesPrunesOldBackupsToLimit(t *testing.T) {
 
 func TestListBackupInfosReturnsNewestFirstWithCounts(t *testing.T) {
 	dir := t.TempDir()
-	backupDir := filepath.Join(dir, "localapp", "diary", "backups")
 	dataFile := filepath.Join(dir, "diary.jsonl")
-	t.Setenv("HOME", dir)
-	t.Setenv("USERPROFILE", dir)
-	t.Setenv("LOCALAPPDATA", filepath.Join(dir, "localapp"))
+	backupDir := testDefaultBackupDir(t, dir)
 
 	if err := os.MkdirAll(backupDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll error: %v", err)
@@ -335,11 +407,8 @@ func TestListBackupInfosReturnsNewestFirstWithCounts(t *testing.T) {
 
 func TestResolveRestorePathUsesBackupIndex(t *testing.T) {
 	dir := t.TempDir()
-	backupDir := filepath.Join(dir, "localapp", "diary", "backups")
 	dataFile := filepath.Join(dir, "diary.jsonl")
-	t.Setenv("HOME", dir)
-	t.Setenv("USERPROFILE", dir)
-	t.Setenv("LOCALAPPDATA", filepath.Join(dir, "localapp"))
+	backupDir := testDefaultBackupDir(t, dir)
 
 	if err := os.MkdirAll(backupDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll error: %v", err)
@@ -365,11 +434,8 @@ func TestResolveRestorePathUsesBackupIndex(t *testing.T) {
 
 func TestPrintBackupListShowsNumberTimestampAndCount(t *testing.T) {
 	dir := t.TempDir()
-	backupDir := filepath.Join(dir, "localapp", "diary", "backups")
 	dataFile := filepath.Join(dir, "diary.jsonl")
-	t.Setenv("HOME", dir)
-	t.Setenv("USERPROFILE", dir)
-	t.Setenv("LOCALAPPDATA", filepath.Join(dir, "localapp"))
+	backupDir := testDefaultBackupDir(t, dir)
 
 	if err := os.MkdirAll(backupDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll error: %v", err)
@@ -399,11 +465,8 @@ func TestPrintBackupListShowsNumberTimestampAndCount(t *testing.T) {
 
 func TestPromptRestorePathSelectsNumberWithoutReturningToShell(t *testing.T) {
 	dir := t.TempDir()
-	backupDir := filepath.Join(dir, "localapp", "diary", "backups")
 	dataFile := filepath.Join(dir, "diary.jsonl")
-	t.Setenv("HOME", dir)
-	t.Setenv("USERPROFILE", dir)
-	t.Setenv("LOCALAPPDATA", filepath.Join(dir, "localapp"))
+	backupDir := testDefaultBackupDir(t, dir)
 
 	if err := os.MkdirAll(backupDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll error: %v", err)
@@ -433,11 +496,8 @@ func TestPromptRestorePathSelectsNumberWithoutReturningToShell(t *testing.T) {
 
 func TestPromptRestorePathRetriesUntilValidNumber(t *testing.T) {
 	dir := t.TempDir()
-	backupDir := filepath.Join(dir, "localapp", "diary", "backups")
 	dataFile := filepath.Join(dir, "diary.jsonl")
-	t.Setenv("HOME", dir)
-	t.Setenv("USERPROFILE", dir)
-	t.Setenv("LOCALAPPDATA", filepath.Join(dir, "localapp"))
+	backupDir := testDefaultBackupDir(t, dir)
 
 	if err := os.MkdirAll(backupDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll error: %v", err)

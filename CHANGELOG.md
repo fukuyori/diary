@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.4] - 2026-06-04
+
+### Added
+
+- Added `diary -d ID n` to delete only the nth slash-separated item from an entry.
+- The item number is 1-based, and out-of-range item deletion leaves the data unchanged.
+
+### Documentation
+
+- Updated the help text and README files to describe the expanded `-d` behavior.
+
 ## [0.9.3] - 2026-04-19
 
 ### Added

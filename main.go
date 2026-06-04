@@ -20,7 +20,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-const appVersion = "0.9.3"
+const appVersion = "0.9.4"
 const maxBackupHistory = 10
 const backupTimestampLayout = "20060102-150405-000000000"
 
@@ -65,8 +65,9 @@ type Options struct {
 	AddDate string
 	AddText string
 
-	Delete   bool
-	DeleteID int
+	Delete     bool
+	DeleteID   int
+	DeletePart int
 }
 
 func main() {
@@ -104,9 +105,25 @@ func main() {
 		fmt.Println("保存しました。")
 
 	case opts.Delete:
-		var deleted bool
-		entries, deleted = deleteByID(entries, opts.DeleteID)
-		if !deleted {
+		var found bool
+		if opts.DeletePart > 0 {
+			var err error
+			entries, found, err = deletePartByID(entries, opts.DeleteID, opts.DeletePart)
+			if err != nil {
+				exitErr("%v", err)
+			}
+			if !found {
+				exitErr("ID %d のデータは見つかりませんでした", opts.DeleteID)
+			}
+			if err := saveWithAutomaticBackup(cfg.DataFile, entries); err != nil {
+				exitErr("保存エラー: %v", err)
+			}
+			fmt.Printf("ID %d の %d 番目の項目を削除しました。\n", opts.DeleteID, opts.DeletePart)
+			break
+		}
+
+		entries, found = deleteByID(entries, opts.DeleteID)
+		if !found {
 			exitErr("ID %d のデータは見つかりませんでした", opts.DeleteID)
 		}
 		if err := saveWithAutomaticBackup(cfg.DataFile, entries); err != nil {
@@ -300,6 +317,16 @@ func parseArgs(args []string) (Options, bool, error) {
 			}
 			id, _ := strconv.Atoi(args[i+1])
 			opts.DeleteID = id
+			if i+2 < len(args) {
+				if i+3 < len(args) {
+					return opts, false, errors.New("-d の引数が多すぎます")
+				}
+				if !isPositiveInt(args[i+2]) {
+					return opts, false, errors.New("-d の第2引数には正の整数の項目番号を指定してください")
+				}
+				part, _ := strconv.Atoi(args[i+2])
+				opts.DeletePart = part
+			}
 			return opts, false, nil
 
 		default:
@@ -400,6 +427,39 @@ func deleteByID(entries []Entry, id int) ([]Entry, bool) {
 	return out, deleted
 }
 
+func deletePartByID(entries []Entry, id, part int) ([]Entry, bool, error) {
+	if part <= 0 {
+		return entries, false, errors.New("削除する項目番号は正の整数で指定してください")
+	}
+
+	for i := range entries {
+		if entries[i].ID != id {
+			continue
+		}
+
+		parts := splitEntryText(entries[i].Text)
+		if part > len(parts) {
+			return entries, true, fmt.Errorf("ID %d には %d 番目の項目がありません", id, part)
+		}
+
+		parts = append(parts[:part-1], parts[part:]...)
+		entries[i].Text = strings.Join(parts, " / ")
+		entries[i].UpdatedAt = time.Now().Format(time.RFC3339)
+		return entries, true, nil
+	}
+
+	return entries, false, nil
+}
+
+func splitEntryText(text string) []string {
+	rawParts := strings.Split(text, "/")
+	parts := make([]string, 0, len(rawParts))
+	for _, rawPart := range rawParts {
+		parts = append(parts, strings.TrimSpace(rawPart))
+	}
+	return parts
+}
+
 func printHelp() {
 	fmt.Printf(`1行日記 CLI v%s
 
@@ -459,6 +519,10 @@ func printHelp() {
 
   diary -d ID
       指定したシリアル番号の記録を削除
+
+  diary -d ID N
+      指定したシリアル番号の記録から "/" 区切りの N 番目の項目を削除
+      N は 1 から数えます
 
 設定ファイル:
   ~/.config/diary/config.toml

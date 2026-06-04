@@ -4,7 +4,7 @@ A simple one-line diary application for the command line.
 
 [日本語版 README](README.ja.md)
 
-Current version: `0.9.3`
+Current version: `0.9.4`
 
 [Changelog](CHANGELOG.md)
 
@@ -13,10 +13,10 @@ Each entry is assigned a serial ID, only one entry is stored per date, and exist
 
 ---
 
-## What's New in 0.9.3
+## What's New in 0.9.4
 
-- Added append mode for existing entries with `-A`
-- Updated the help text and README files to describe `-A`
+- Added `diary -d ID n` to delete only the nth slash-separated item from an entry
+- Updated the help text and README files to describe the expanded `-d` behavior
 
 ---
 
@@ -35,6 +35,7 @@ Each entry is assigned a serial ID, only one entry is stored per date, and exist
 - Show entries in oldest-first or newest-first order
 - Optionally display serial IDs
 - Delete entries by serial ID
+- Delete one slash-separated item from an entry
 - Automatic backup on write
 - Manual backup and restore
 - TOML-based configuration
@@ -50,7 +51,7 @@ Example:
 ```json
 {"id":1,"date":"2026-03-25","text":"Went for a walk.","created_at":"2026-03-25T21:00:00+09:00","updated_at":"2026-03-25T21:00:00+09:00"}
 {"id":2,"date":"2026-03-26","text":"A quiet day.","created_at":"2026-03-26T22:00:00+09:00","updated_at":"2026-03-26T22:15:00+09:00"}
-````
+```
 
 ---
 
@@ -234,6 +235,15 @@ diary -r -n -l 30
 diary -d 3
 ```
 
+### Delete one slash-separated item
+
+```bash
+diary -d 101 2
+```
+
+If the entry text is `a / b / c`, this removes only the second item and leaves `a / c`.
+Item numbers are 1-based. If the specified item does not exist, the data is left unchanged and an error is shown.
+
 ---
 
 ## Command Summary
@@ -255,6 +265,7 @@ diary -d 3
 | `diary -A "text"`            | Append to today's entry, or create it if missing          |
 | `diary -A YYYY-MM-DD "text"` | Append to an entry for a specific date, or create it      |
 | `diary -d ID`                | Delete an entry by serial ID                              |
+| `diary -d ID n`              | Delete the nth slash-separated item from an entry         |
 | `diary -b [path]`            | Create a backup immediately                               |
 | `diary -R`                   | List available backups and prompt for a restore number    |
 | `diary -R backup.jsonl`      | Restore from a backup file                                |
@@ -268,6 +279,8 @@ diary -d 3
 * Serial IDs are assigned only when a new entry is first created.
 * Updating an existing entry keeps its original serial ID.
 * Deletion is performed by serial ID.
+* `diary -d ID n` deletes only the nth item after splitting the entry text by `/`. n is 1-based.
+* If the item specified by `diary -d ID n` does not exist, the data is left unchanged.
 * Text search is case-insensitive.
 * `-i` starts a prompt-based narrowing search loop and exits on an empty line.
 * Add, update, and delete automatically create a timestamped `.jsonl` backup.
