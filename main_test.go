@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func testDefaultBackupDir(t *testing.T, dir string) string {
@@ -63,6 +64,41 @@ func TestCollectEntriesMonthAndSearch(t *testing.T) {
 		if entry.Date[:7] != "2026-03" {
 			t.Fatalf("entry outside month filter: %+v", entry)
 		}
+	}
+}
+
+func TestBuildCalendarHTMLShowsMonthEntries(t *testing.T) {
+	html := buildCalendarHTML([]Entry{
+		{ID: 1, Date: "2026-06-04", Text: "meeting / walk"},
+		{ID: 2, Date: "2026-07-01", Text: "outside month"},
+		{ID: 3, Date: "2026-06-05", Text: "<tag>"},
+	}, 2026, 6)
+
+	if !strings.Contains(html, "2026年06月") {
+		t.Fatalf("calendar title missing month: %q", html)
+	}
+	if !strings.Contains(html, "meeting<br>walk") {
+		t.Fatalf("calendar missing entry text: %q", html)
+	}
+	if !strings.Contains(html, `class="weekday sunday"`) || !strings.Contains(html, `class="weekday saturday"`) {
+		t.Fatalf("calendar missing weekend weekday classes: %q", html)
+	}
+	if !strings.Contains(html, `class="day sunday"`) || !strings.Contains(html, `class="day saturday"`) {
+		t.Fatalf("calendar missing weekend day classes: %q", html)
+	}
+	if strings.Contains(html, "outside month") {
+		t.Fatalf("calendar included entry outside target month: %q", html)
+	}
+	if !strings.Contains(html, "&lt;tag&gt;") {
+		t.Fatalf("calendar did not escape entry text: %q", html)
+	}
+}
+
+func TestFormatCalendarEntryTextTreatsSlashAsLineBreak(t *testing.T) {
+	got := formatCalendarEntryText("a / b / <tag>")
+	want := "a<br>b<br>&lt;tag&gt;"
+	if got != want {
+		t.Fatalf("unexpected formatted entry: got %q want %q", got, want)
 	}
 }
 
@@ -123,8 +159,41 @@ func TestParseArgsRestoreWithoutArgument(t *testing.T) {
 	}
 }
 
-func TestParseArgsVersion(t *testing.T) {
+func TestParseArgsCalendar(t *testing.T) {
 	opts, showHelp, err := parseArgs([]string{"-v"})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+	if showHelp {
+		t.Fatal("expected showHelp=false")
+	}
+	if !opts.Calendar {
+		t.Fatalf("expected calendar flag to be set: %+v", opts)
+	}
+}
+
+func TestParseArgsCalendarWithMonth(t *testing.T) {
+	opts, showHelp, err := parseArgs([]string{"-v", "2026-03"})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+	if showHelp {
+		t.Fatal("expected showHelp=false")
+	}
+	if !opts.Calendar || opts.CalendarMonth != "2026-03" {
+		t.Fatalf("unexpected calendar opts: %+v", opts)
+	}
+}
+
+func TestParseArgsCalendarRejectsInvalidMonth(t *testing.T) {
+	_, _, err := parseArgs([]string{"-v", "2026-13"})
+	if err == nil {
+		t.Fatal("expected parseArgs to reject invalid calendar month")
+	}
+}
+
+func TestParseArgsVersion(t *testing.T) {
+	opts, showHelp, err := parseArgs([]string{"--version"})
 	if err != nil {
 		t.Fatalf("parseArgs returned error: %v", err)
 	}
@@ -137,9 +206,36 @@ func TestParseArgsVersion(t *testing.T) {
 }
 
 func TestParseArgsVersionRejectsMixedOptions(t *testing.T) {
-	_, _, err := parseArgs([]string{"-v", "-l"})
+	_, _, err := parseArgs([]string{"--version", "-l"})
 	if err == nil {
 		t.Fatal("expected parseArgs to reject mixed version options")
+	}
+}
+
+func TestParseArgsCalendarRejectsMixedOptions(t *testing.T) {
+	_, _, err := parseArgs([]string{"-v", "-l"})
+	if err == nil {
+		t.Fatal("expected parseArgs to reject mixed calendar options")
+	}
+}
+
+func TestResolveCalendarMonth(t *testing.T) {
+	now := time.Date(2026, 6, 4, 0, 0, 0, 0, time.Local)
+
+	year, month, err := resolveCalendarMonth("", now)
+	if err != nil {
+		t.Fatalf("resolveCalendarMonth returned error: %v", err)
+	}
+	if year != 2026 || month != time.June {
+		t.Fatalf("unexpected current month: %d %s", year, month)
+	}
+
+	year, month, err = resolveCalendarMonth("2026-03", now)
+	if err != nil {
+		t.Fatalf("resolveCalendarMonth returned error: %v", err)
+	}
+	if year != 2026 || month != time.March {
+		t.Fatalf("unexpected specified month: %d %s", year, month)
 	}
 }
 

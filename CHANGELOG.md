@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.0] - 2026-06-04
+
+### Added
+
+- Added a browser-based calendar GUI with `diary -v`.
+- Added `diary -v YYYY-MM` to show a specified month in the calendar GUI.
+
+### Changed
+
+- Moved version output from `-v` to `--version`.
+- Calendar entries now display slash-separated items on separate lines.
+- Sunday and Saturday dates are color-coded in the calendar.
+
 ## [0.9.5] - 2026-06-04
 
 ### Added

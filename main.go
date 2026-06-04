@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -20,7 +22,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-const appVersion = "0.9.5"
+const appVersion = "1.0.0"
 const maxBackupHistory = 10
 const backupTimestampLayout = "20060102-150405-000000000"
 
@@ -59,6 +61,8 @@ type Options struct {
 	Restore           bool
 	RestorePath       string
 	Version           bool
+	Calendar          bool
+	CalendarMonth     string
 
 	Add     bool
 	Append  bool
@@ -96,6 +100,11 @@ func main() {
 	}
 
 	switch {
+	case opts.Calendar:
+		if err := runCalendarGUI(entries, opts.CalendarMonth, time.Now()); err != nil {
+			exitErr("カレンダー表示エラー: %v", err)
+		}
+
 	case opts.Add || opts.Append:
 		if err := addOrUpdateEntry(&entries, opts, cfg); err != nil {
 			exitErr("%v", err)
@@ -200,7 +209,18 @@ func parseArgs(args []string) (Options, bool, error) {
 			return opts, true, nil
 
 		case "-v", "--version":
-			opts.Version = true
+			if arg == "--version" {
+				opts.Version = true
+			} else {
+				opts.Calendar = true
+				if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+					if !isYearMonth(args[i+1]) {
+						return opts, false, errors.New("-v の年月は YYYY-MM 形式で指定してください")
+					}
+					opts.CalendarMonth = args[i+1]
+					i++
+				}
+			}
 
 		case "-r":
 			opts.Reverse = true
@@ -388,7 +408,10 @@ func parseArgs(args []string) (Options, bool, error) {
 	if opts.Backup && (opts.Add || opts.Append || opts.Delete) {
 		return opts, false, errors.New("-b は -a、-A、-d と同時に使えません")
 	}
-	if opts.Version && (opts.Add || opts.Append || opts.Delete || opts.List || opts.Search || opts.InteractiveSearch || opts.Backup || opts.Restore || opts.ListMonth != "" || opts.Reverse || opts.Numbered || opts.ListLimitSet) {
+	if opts.Version && (opts.Add || opts.Append || opts.Delete || opts.List || opts.Search || opts.InteractiveSearch || opts.Backup || opts.Restore || opts.Calendar || opts.ListMonth != "" || opts.Reverse || opts.Numbered || opts.ListLimitSet) {
+		return opts, false, errors.New("--version は単独で使ってください")
+	}
+	if opts.Calendar && (opts.Add || opts.Append || opts.Delete || opts.List || opts.Search || opts.InteractiveSearch || opts.Backup || opts.Restore || opts.Version || opts.ListMonth != "" || opts.Reverse || opts.Numbered || opts.ListLimitSet) {
 		return opts, false, errors.New("-v は単独で使ってください")
 	}
 	if opts.Restore && (opts.List || opts.Search || opts.InteractiveSearch || opts.ListMonth != "" || opts.Reverse || opts.Numbered) {
@@ -531,7 +554,10 @@ func printHelp() {
   diary
       ヘルプを表示
 
-  diary -v
+  diary -v [YYYY-MM]
+      GUIで当月または指定年月のカレンダーを表示
+
+  diary --version
       バージョンを表示
 
   diary -l [件数]
@@ -618,6 +644,171 @@ func printHelp() {
 
 func printVersion() {
 	fmt.Printf("diary v%s\n", appVersion)
+}
+
+func runCalendarGUI(entries []Entry, monthArg string, now time.Time) error {
+	year, month, err := resolveCalendarMonth(monthArg, now)
+	if err != nil {
+		return err
+	}
+	htmlText := buildCalendarHTML(entries, year, month)
+
+	file, err := os.CreateTemp("", fmt.Sprintf("diary-calendar-%04d-%02d-*.html", year, int(month)))
+	if err != nil {
+		return err
+	}
+	path := file.Name()
+	if _, err := file.WriteString(htmlText); err != nil {
+		file.Close()
+		_ = os.Remove(path)
+		return err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return err
+	}
+
+	if err := openInBrowser(path); err != nil {
+		return err
+	}
+	fmt.Printf("カレンダーを開きました: %s\n", path)
+	return nil
+}
+
+func resolveCalendarMonth(monthArg string, now time.Time) (int, time.Month, error) {
+	if strings.TrimSpace(monthArg) == "" {
+		year, month, _ := now.Date()
+		return year, month, nil
+	}
+	parsed, err := time.Parse("2006-01", monthArg)
+	if err != nil {
+		return 0, 0, errors.New("年月は YYYY-MM 形式で指定してください")
+	}
+	year, month, _ := parsed.Date()
+	return year, month, nil
+}
+
+func openInBrowser(path string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", path)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", path)
+	default:
+		cmd = exec.Command("xdg-open", path)
+	}
+	return cmd.Start()
+}
+
+func buildCalendarHTML(entries []Entry, year int, month time.Month) string {
+	entriesByDate := make(map[string]Entry)
+	for _, entry := range entries {
+		entriesByDate[entry.Date] = entry
+	}
+
+	first := time.Date(year, month, 1, 0, 0, 0, 0, time.Local)
+	daysInMonth := first.AddDate(0, 1, -1).Day()
+	leadingDays := int(first.Weekday())
+	today := todayString()
+
+	var b strings.Builder
+	fmt.Fprintf(&b, `<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>diary %04d-%02d</title>
+<style>
+:root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+body { margin: 0; background: #f6f7f9; color: #20242a; }
+main { max-width: 1180px; margin: 0 auto; padding: 28px; }
+h1 { margin: 0 0 18px; font-size: 28px; font-weight: 700; }
+.calendar { display: grid; grid-template-columns: repeat(7, minmax(120px, 1fr)); gap: 1px; background: #cfd5dc; border: 1px solid #cfd5dc; }
+.weekday, .day { background: #fff; }
+.weekday { padding: 10px; text-align: center; font-weight: 700; color: #59616b; }
+.weekday.sunday, .day.sunday .date { color: #c3312f; }
+.weekday.saturday, .day.saturday .date { color: #2468c9; }
+.day { min-height: 126px; padding: 10px; }
+.empty { background: #eef1f4; }
+.date { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin-bottom: 8px; border-radius: 50%%; font-weight: 700; }
+.today .date { background: #20242a; color: #fff; }
+.today.sunday .date { background: #c3312f; color: #fff; }
+.today.saturday .date { background: #2468c9; color: #fff; }
+.entry { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; font-size: 14px; color: #222831; }
+.missing { color: #a0a7b0; font-size: 13px; }
+@media (max-width: 760px) {
+  main { padding: 14px; }
+  .calendar { grid-template-columns: 1fr; background: transparent; border: 0; gap: 8px; }
+  .weekday, .empty { display: none; }
+  .day { min-height: 0; border: 1px solid #d8dde3; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1>%04d年%02d月</h1>
+<section class="calendar" aria-label="%04d年%02d月のカレンダー">
+`, year, int(month), year, int(month), year, int(month))
+
+	for i, weekday := range []string{"日", "月", "火", "水", "木", "金", "土"} {
+		classes := weekdayClasses(i)
+		fmt.Fprintf(&b, `<div class="%s">%s</div>`+"\n", classes, weekday)
+	}
+	for i := 0; i < leadingDays; i++ {
+		b.WriteString(`<div class="day empty" aria-hidden="true"></div>` + "\n")
+	}
+	for day := 1; day <= daysInMonth; day++ {
+		date := fmt.Sprintf("%04d-%02d-%02d", year, int(month), day)
+		classes := "day"
+		switch time.Date(year, month, day, 0, 0, 0, 0, time.Local).Weekday() {
+		case time.Sunday:
+			classes += " sunday"
+		case time.Saturday:
+			classes += " saturday"
+		}
+		if date == today {
+			classes += " today"
+		}
+		fmt.Fprintf(&b, `<article class="%s">`+"\n", classes)
+		fmt.Fprintf(&b, `<div class="date">%d</div>`+"\n", day)
+		if entry, ok := entriesByDate[date]; ok && strings.TrimSpace(entry.Text) != "" {
+			fmt.Fprintf(&b, `<div class="entry">%s</div>`+"\n", formatCalendarEntryText(entry.Text))
+		} else {
+			b.WriteString(`<div class="missing">未登録</div>` + "\n")
+		}
+		b.WriteString("</article>\n")
+	}
+
+	b.WriteString(`</section>
+</main>
+</body>
+</html>
+`)
+	return b.String()
+}
+
+func weekdayClasses(index int) string {
+	switch index {
+	case 0:
+		return "weekday sunday"
+	case 6:
+		return "weekday saturday"
+	default:
+		return "weekday"
+	}
+}
+
+func formatCalendarEntryText(text string) string {
+	parts := splitEntryText(text)
+	lines := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		lines = append(lines, html.EscapeString(part))
+	}
+	return strings.Join(lines, "<br>")
 }
 
 func loadEntries(path string) ([]Entry, error) {

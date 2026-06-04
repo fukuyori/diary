@@ -4,7 +4,7 @@ A simple one-line diary application for the command line.
 
 [日本語版 README](README.ja.md)
 
-Current version: `0.9.5`
+Current version: `1.0.0`
 
 [Changelog](CHANGELOG.md)
 
@@ -13,12 +13,12 @@ Each entry is assigned a serial ID, only one entry is stored per date, and exist
 
 ---
 
-## What's New in 0.9.5
+## What's New in 1.0.0
 
-- Added `yesterday` for `-a` and `-A` to operate on yesterday's entry
-- Added `today` and `yesterday` for `-d` to delete today's or yesterday's entry
-- Added `diary -d today n` / `diary -d yesterday n` to delete one item from today's or yesterday's entry
-- Updated the help text and README files to describe `today` / `yesterday`
+- Changed `diary -v` to open a browser calendar GUI
+- Added `diary -v YYYY-MM` to show a specified month
+- Calendar entries display `/` separated items on separate lines
+- Weekend dates are color-coded in the calendar
 
 ---
 
@@ -111,10 +111,19 @@ max_len = 200
 diary
 ```
 
-### Show version
+### Show a calendar in a GUI
 
 ```bash
 diary -v
+diary -v 2026-03
+```
+
+This opens a browser calendar for the current or specified month and shows registered diary text by date.
+
+### Show version
+
+```bash
+diary --version
 ```
 
 ### Add an entry for today
@@ -276,7 +285,8 @@ Item numbers are 1-based. If the specified item does not exist, the data is left
 | Command                      | Description                                               |
 | ---------------------------- | --------------------------------------------------------- |
 | `diary`                      | Show help                                                 |
-| `diary -v`                   | Show version                                              |
+| `diary -v [YYYY-MM]`         | Show a calendar for the current or specified month in a GUI |
+| `diary --version`            | Show version                                              |
 | `diary -l [n]`               | List recent entries in oldest-first order                 |
 | `diary -m YYYY-MM -l [n]`    | List entries for the specified year and month             |
 | `diary -s "query"`           | Search entries case-insensitively                         |
