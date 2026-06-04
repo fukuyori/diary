@@ -4,7 +4,7 @@ A simple one-line diary application for the command line.
 
 [日本語版 README](README.ja.md)
 
-Current version: `1.0.0`
+Current version: `1.0.1`
 
 [Changelog](CHANGELOG.md)
 
@@ -13,12 +13,9 @@ Each entry is assigned a serial ID, only one entry is stored per date, and exist
 
 ---
 
-## What's New in 1.0.0
+## What's New in 1.0.1
 
-- Changed `diary -v` to open a browser calendar GUI
-- Added `diary -v YYYY-MM` to show a specified month
-- Calendar entries display `/` separated items on separate lines
-- Weekend dates are color-coded in the calendar
+- List output such as `diary -l` highlights today's entry when printed directly to a terminal
 
 ---
 
@@ -337,6 +334,7 @@ Item numbers are 1-based. If the specified item does not exist, the data is left
 * `-b` creates an immediate backup in the same default location unless a path is given.
 * `-R` with no argument lists numbered backups with timestamp and record count, then asks for the number to restore.
 * `-R backup.jsonl` restores from a backup file, first saves the current data as a safety backup, and requires typing `diary` to proceed.
+* List output such as `diary -l` highlights today's entry when printed directly to a terminal.
 
 ---
 

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.1] - 2026-06-04
+
+### Changed
+
+- List output such as `diary -l` now highlights today's entry when printed directly to a terminal.
+
 ## [1.0.0] - 2026-06-04
 
 ### Added

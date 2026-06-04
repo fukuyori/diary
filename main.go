@@ -22,9 +22,11 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-const appVersion = "1.0.0"
+const appVersion = "1.0.1"
 const maxBackupHistory = 10
 const backupTimestampLayout = "20060102-150405-000000000"
+const todayHighlightStart = "\x1b[1;33m"
+const todayHighlightEnd = "\x1b[0m"
 
 type BackupInfo struct {
 	Index     int
@@ -1187,13 +1189,29 @@ func resolveLimit(total int, opts Options) int {
 }
 
 func printEntries(entries []Entry, opts Options) {
+	today := todayString()
+	highlightToday := stdoutSupportsANSI()
 	for _, e := range entries {
-		if opts.Numbered {
-			fmt.Printf("%d  %s  %s\n", e.ID, e.Date, e.Text)
-		} else {
-			fmt.Printf("%s  %s\n", e.Date, e.Text)
-		}
+		fmt.Println(formatEntryLine(e, opts, today, highlightToday))
 	}
+}
+
+func formatEntryLine(e Entry, opts Options, today string, highlightToday bool) string {
+	var line string
+	if opts.Numbered {
+		line = fmt.Sprintf("%d  %s  %s", e.ID, e.Date, e.Text)
+	} else {
+		line = fmt.Sprintf("%s  %s", e.Date, e.Text)
+	}
+	if highlightToday && e.Date == today {
+		return todayHighlightStart + line + todayHighlightEnd
+	}
+	return line
+}
+
+func stdoutSupportsANSI() bool {
+	info, err := os.Stdout.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 func emptyMessage(opts Options) string {

@@ -102,6 +102,24 @@ func TestFormatCalendarEntryTextTreatsSlashAsLineBreak(t *testing.T) {
 	}
 }
 
+func TestFormatEntryLineHighlightsToday(t *testing.T) {
+	entry := Entry{ID: 3, Date: "2026-06-04", Text: "today note"}
+	got := formatEntryLine(entry, Options{}, "2026-06-04", true)
+	want := todayHighlightStart + "2026-06-04  today note" + todayHighlightEnd
+	if got != want {
+		t.Fatalf("unexpected highlighted line: got %q want %q", got, want)
+	}
+}
+
+func TestFormatEntryLineDoesNotHighlightWhenDisabled(t *testing.T) {
+	entry := Entry{ID: 3, Date: "2026-06-04", Text: "today note"}
+	got := formatEntryLine(entry, Options{Numbered: true}, "2026-06-04", false)
+	want := "3  2026-06-04  today note"
+	if got != want {
+		t.Fatalf("unexpected plain line: got %q want %q", got, want)
+	}
+}
+
 func TestResolveBackupPathUsesDirectoryWhenNoExtension(t *testing.T) {
 	dataFile := filepath.Join("data", "diary.jsonl")
 	got, err := resolveBackupPath(dataFile, filepath.Join("tmp", "backups"))
