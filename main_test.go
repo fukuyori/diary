@@ -156,10 +156,55 @@ func TestParseArgsDeletePart(t *testing.T) {
 	}
 }
 
+func TestParseArgsDeleteToday(t *testing.T) {
+	opts, showHelp, err := parseArgs([]string{"-d", "today"})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+	if showHelp {
+		t.Fatal("expected showHelp=false")
+	}
+	if !opts.Delete || opts.DeleteDate != todayString() || opts.DeleteID != 0 {
+		t.Fatalf("unexpected delete opts: %+v", opts)
+	}
+}
+
+func TestParseArgsDeleteYesterdayPart(t *testing.T) {
+	opts, showHelp, err := parseArgs([]string{"-d", "yesterday", "2"})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+	if showHelp {
+		t.Fatal("expected showHelp=false")
+	}
+	if !opts.Delete || opts.DeleteDate != yesterdayString() || opts.DeletePart != 2 {
+		t.Fatalf("unexpected delete opts: %+v", opts)
+	}
+}
+
 func TestParseArgsDeletePartRejectsInvalidPart(t *testing.T) {
 	_, _, err := parseArgs([]string{"-d", "101", "x"})
 	if err == nil {
 		t.Fatal("expected parseArgs to reject invalid delete part")
+	}
+}
+
+func TestParseArgsAddForYesterday(t *testing.T) {
+	opts, showHelp, err := parseArgs([]string{"-a", "yesterday", "Work"})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+	if showHelp {
+		t.Fatal("expected showHelp=false")
+	}
+	if !opts.Add {
+		t.Fatalf("expected add flag to be set: %+v", opts)
+	}
+	if opts.AddDate != yesterdayString() {
+		t.Fatalf("unexpected add date: got %q want %q", opts.AddDate, yesterdayString())
+	}
+	if opts.AddText != "Work" {
+		t.Fatalf("unexpected add text: %q", opts.AddText)
 	}
 }
 
@@ -176,6 +221,25 @@ func TestParseArgsAppendForToday(t *testing.T) {
 	}
 	if opts.AddDate != todayString() {
 		t.Fatalf("unexpected append date: got %q want %q", opts.AddDate, todayString())
+	}
+	if opts.AddText != "Play" {
+		t.Fatalf("unexpected append text: %q", opts.AddText)
+	}
+}
+
+func TestParseArgsAppendForYesterday(t *testing.T) {
+	opts, showHelp, err := parseArgs([]string{"-A", "yesterday", "Play"})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+	if showHelp {
+		t.Fatal("expected showHelp=false")
+	}
+	if !opts.Append {
+		t.Fatalf("expected append flag to be set: %+v", opts)
+	}
+	if opts.AddDate != yesterdayString() {
+		t.Fatalf("unexpected append date: got %q want %q", opts.AddDate, yesterdayString())
 	}
 	if opts.AddText != "Play" {
 		t.Fatalf("unexpected append text: %q", opts.AddText)
@@ -284,6 +348,47 @@ func TestDeletePartByIDRejectsOutOfRangePart(t *testing.T) {
 	}
 	if got[0].Text != "a / b / c" {
 		t.Fatalf("text should be unchanged: %q", got[0].Text)
+	}
+}
+
+func TestDeleteByDateRemovesEntry(t *testing.T) {
+	entries := []Entry{
+		{ID: 1, Date: "2026-04-18", Text: "a"},
+		{ID: 2, Date: "2026-04-19", Text: "b"},
+	}
+
+	got, found := deleteByDate(entries, "2026-04-18")
+	if !found {
+		t.Fatal("expected entry to be found")
+	}
+	if len(got) != 1 || got[0].ID != 2 {
+		t.Fatalf("unexpected entries after delete: %+v", got)
+	}
+}
+
+func TestDeletePartByDateRemovesSlashSeparatedPart(t *testing.T) {
+	entries := []Entry{
+		{
+			ID:        101,
+			Date:      "2026-04-19",
+			Text:      "a / b / c",
+			CreatedAt: "2026-04-19T09:00:00+09:00",
+			UpdatedAt: "2026-04-19T09:00:00+09:00",
+		},
+	}
+
+	got, found, err := deletePartByDate(entries, "2026-04-19", 2)
+	if err != nil {
+		t.Fatalf("deletePartByDate returned error: %v", err)
+	}
+	if !found {
+		t.Fatal("expected entry to be found")
+	}
+	if got[0].Text != "a / c" {
+		t.Fatalf("unexpected text: %q", got[0].Text)
+	}
+	if got[0].UpdatedAt == "2026-04-19T09:00:00+09:00" {
+		t.Fatal("updated_at should be refreshed")
 	}
 }
 

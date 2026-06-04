@@ -4,7 +4,7 @@
 
 [English README](README.md)
 
-現在のバージョン: `0.9.4`
+現在のバージョン: `0.9.5`
 
 [変更履歴](CHANGELOG.md)
 
@@ -13,10 +13,12 @@
 
 ---
 
-## 0.9.4 の更新内容
+## 0.9.5 の更新内容
 
-- `diary -d ID n` で "/" 区切りの n 番目の項目だけを削除する機能を追加
-- `-d` の説明に合わせてヘルプと README を更新
+- `-a` と `-A` で `yesterday` を指定して前日の記録を操作できるように変更
+- `-d` で `today` / `yesterday` を指定して今日または前日の記録を削除できるように変更
+- `diary -d today n` / `diary -d yesterday n` で今日または前日の記録から項目削除できるように変更
+- `today` / `yesterday` の説明に合わせてヘルプと README を更新
 
 ---
 
@@ -28,6 +30,7 @@
 - 自動で連番 ID を採番
 - 同じ日付に書くと既存記録を更新
 - 同じ日付の既存記録へ追記可能
+- `yesterday` 指定で前日の記録を追加・追記可能
 - 最近の記録を一覧表示
 - 指定年月の記録を一覧表示
 - 大文字小文字を区別せず検索
@@ -35,6 +38,7 @@
 - 古い順 / 新しい順で表示可能
 - 連番 ID の表示に対応
 - 連番 ID で削除可能
+- `today` / `yesterday` 指定で今日または前日の記録を削除可能
 - "/" 区切りの項目だけを指定して削除可能
 - 書き込み時の自動バックアップ
 - 手動バックアップと復元
@@ -125,6 +129,12 @@ diary -a "A quiet day."
 diary -a 2026-03-25 "Went for a walk."
 ```
 
+### 前日の記録を追加または更新
+
+```bash
+diary -a yesterday "Went for a walk."
+```
+
 ### 今日の記録に追記
 
 ```bash
@@ -137,6 +147,12 @@ diary -A "Play"
 
 ```bash
 diary -A 2026-03-25 "Play"
+```
+
+### 前日の記録に追記
+
+```bash
+diary -A yesterday "Play"
 ```
 
 ### 直近 7 件を古い順で表示
@@ -235,10 +251,19 @@ diary -r -n -l 30
 diary -d 3
 ```
 
+### 今日または前日の記録を削除
+
+```bash
+diary -d today
+diary -d yesterday
+```
+
 ### "/" 区切りの項目を削除
 
 ```bash
 diary -d 101 2
+diary -d today 2
+diary -d yesterday 2
 ```
 
 本文が `a / b / c` の場合、2 番目の `b` だけを削除して `a / c` になります。
@@ -262,10 +287,16 @@ diary -d 101 2
 | `diary -r -n -l [n]` | 直近の記録を新しい順・連番 ID 付きで表示 |
 | `diary -a "text"` | 今日の日付で追加または更新 |
 | `diary -a YYYY-MM-DD "text"` | 指定日で追加または更新 |
+| `diary -a yesterday "text"` | 前日の日付で追加または更新 |
 | `diary -A "text"` | 今日の記録に追記。未登録なら新規追加 |
 | `diary -A YYYY-MM-DD "text"` | 指定日の記録に追記。未登録なら新規追加 |
+| `diary -A yesterday "text"` | 前日の記録に追記。未登録なら新規追加 |
 | `diary -d ID` | 連番 ID を指定して削除 |
+| `diary -d today` | 今日の記録を削除 |
+| `diary -d yesterday` | 前日の記録を削除 |
 | `diary -d ID n` | 連番 ID の記録から "/" 区切りの n 番目の項目を削除 |
+| `diary -d today n` | 今日の記録から "/" 区切りの n 番目の項目を削除 |
+| `diary -d yesterday n` | 前日の記録から "/" 区切りの n 番目の項目を削除 |
 | `diary -b [path]` | すぐにバックアップを作成 |
 | `diary -R` | バックアップ一覧を表示し、そのまま番号入力で復元 |
 | `diary -R backup.jsonl` | バックアップファイルから復元 |
@@ -276,11 +307,15 @@ diary -d 101 2
 
 * 1 日につき 1 件だけ保存されます。
 * 同じ日付に追加すると既存の記録が更新されます。
+* `diary -a yesterday "text"` は前日の日付で記録を追加または更新します。
+* `diary -A yesterday "text"` は前日の記録に追記します。
 * 連番 ID は新規作成時にだけ採番されます。
 * 既存記録を更新しても元の連番 ID は維持されます。
 * 削除は連番 ID で行います。
+* `diary -d today` と `diary -d yesterday` は、それぞれ今日または前日の記録を削除します。
 * `diary -d ID n` は、本文を `/` で区切った n 番目の項目だけを削除します。n は 1 から数えます。
-* `diary -d ID n` で指定した項目が存在しない場合、データは変更されません。
+* `diary -d today n` と `diary -d yesterday n` は、それぞれ今日または前日の記録から n 番目の項目だけを削除します。
+* `diary -d ID n`、`diary -d today n`、`diary -d yesterday n` で指定した項目が存在しない場合、データは変更されません。
 * テキスト検索は大文字小文字を区別しません。
 * `-i` はプロンプト付きの絞り込み検索を開始し、空行で終了します。
 * 追加・更新・削除時にはタイムスタンプ付きの `.jsonl` バックアップが自動作成されます。

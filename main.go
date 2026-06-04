@@ -20,7 +20,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-const appVersion = "0.9.4"
+const appVersion = "0.9.5"
 const maxBackupHistory = 10
 const backupTimestampLayout = "20060102-150405-000000000"
 
@@ -67,6 +67,7 @@ type Options struct {
 
 	Delete     bool
 	DeleteID   int
+	DeleteDate string
 	DeletePart int
 }
 
@@ -108,28 +109,36 @@ func main() {
 		var found bool
 		if opts.DeletePart > 0 {
 			var err error
-			entries, found, err = deletePartByID(entries, opts.DeleteID, opts.DeletePart)
+			if opts.DeleteDate != "" {
+				entries, found, err = deletePartByDate(entries, opts.DeleteDate, opts.DeletePart)
+			} else {
+				entries, found, err = deletePartByID(entries, opts.DeleteID, opts.DeletePart)
+			}
 			if err != nil {
 				exitErr("%v", err)
 			}
 			if !found {
-				exitErr("ID %d のデータは見つかりませんでした", opts.DeleteID)
+				exitErr("%s のデータは見つかりませんでした", deleteTargetLabel(opts))
 			}
 			if err := saveWithAutomaticBackup(cfg.DataFile, entries); err != nil {
 				exitErr("保存エラー: %v", err)
 			}
-			fmt.Printf("ID %d の %d 番目の項目を削除しました。\n", opts.DeleteID, opts.DeletePart)
+			fmt.Printf("%s の %d 番目の項目を削除しました。\n", deleteTargetLabel(opts), opts.DeletePart)
 			break
 		}
 
-		entries, found = deleteByID(entries, opts.DeleteID)
+		if opts.DeleteDate != "" {
+			entries, found = deleteByDate(entries, opts.DeleteDate)
+		} else {
+			entries, found = deleteByID(entries, opts.DeleteID)
+		}
 		if !found {
-			exitErr("ID %d のデータは見つかりませんでした", opts.DeleteID)
+			exitErr("%s のデータは見つかりませんでした", deleteTargetLabel(opts))
 		}
 		if err := saveWithAutomaticBackup(cfg.DataFile, entries); err != nil {
 			exitErr("保存エラー: %v", err)
 		}
-		fmt.Printf("ID %d を削除しました。\n", opts.DeleteID)
+		fmt.Printf("%s を削除しました。\n", deleteTargetLabel(opts))
 
 	case opts.Backup:
 		if _, err := backupEntries(entries, cfg.DataFile, opts.BackupPath); err != nil {
@@ -259,9 +268,18 @@ func parseArgs(args []string) (Options, bool, error) {
 				opts.AddText = text
 				return opts, false, nil
 			}
+			if len(rest) == 1 && rest[0] == "yesterday" {
+				text, err := promptText()
+				if err != nil {
+					return opts, false, err
+				}
+				opts.AddDate = yesterdayString()
+				opts.AddText = text
+				return opts, false, nil
+			}
 
-			if len(rest) >= 2 && isDate(rest[0]) {
-				opts.AddDate = rest[0]
+			if len(rest) >= 2 && isAddDateArg(rest[0]) {
+				opts.AddDate = resolveAddDateArg(rest[0])
 				opts.AddText = strings.Join(rest[1:], " ")
 			} else {
 				opts.AddDate = todayString()
@@ -289,9 +307,18 @@ func parseArgs(args []string) (Options, bool, error) {
 				opts.AddText = text
 				return opts, false, nil
 			}
+			if len(rest) == 1 && rest[0] == "yesterday" {
+				text, err := promptText()
+				if err != nil {
+					return opts, false, err
+				}
+				opts.AddDate = yesterdayString()
+				opts.AddText = text
+				return opts, false, nil
+			}
 
-			if len(rest) >= 2 && isDate(rest[0]) {
-				opts.AddDate = rest[0]
+			if len(rest) >= 2 && isAddDateArg(rest[0]) {
+				opts.AddDate = resolveAddDateArg(rest[0])
 				opts.AddText = strings.Join(rest[1:], " ")
 			} else {
 				opts.AddDate = todayString()
@@ -310,13 +337,17 @@ func parseArgs(args []string) (Options, bool, error) {
 			opts.Delete = true
 
 			if i+1 >= len(args) {
-				return opts, false, errors.New("-d には削除対象のシリアル番号が必要です")
+				return opts, false, errors.New("-d には削除対象のシリアル番号、today、yesterday のいずれかが必要です")
 			}
-			if !isPositiveInt(args[i+1]) {
-				return opts, false, errors.New("-d には正の整数のシリアル番号を指定してください")
+			if isDeleteDateArg(args[i+1]) {
+				opts.DeleteDate = resolveDeleteDateArg(args[i+1])
+			} else {
+				if !isPositiveInt(args[i+1]) {
+					return opts, false, errors.New("-d には正の整数のシリアル番号、today、yesterday のいずれかを指定してください")
+				}
+				id, _ := strconv.Atoi(args[i+1])
+				opts.DeleteID = id
 			}
-			id, _ := strconv.Atoi(args[i+1])
-			opts.DeleteID = id
 			if i+2 < len(args) {
 				if i+3 < len(args) {
 					return opts, false, errors.New("-d の引数が多すぎます")
@@ -427,19 +458,45 @@ func deleteByID(entries []Entry, id int) ([]Entry, bool) {
 	return out, deleted
 }
 
+func deleteByDate(entries []Entry, date string) ([]Entry, bool) {
+	out := make([]Entry, 0, len(entries))
+	deleted := false
+
+	for _, e := range entries {
+		if e.Date == date {
+			deleted = true
+			continue
+		}
+		out = append(out, e)
+	}
+	return out, deleted
+}
+
 func deletePartByID(entries []Entry, id, part int) ([]Entry, bool, error) {
+	return deletePart(entries, part, func(entry Entry) bool {
+		return entry.ID == id
+	}, fmt.Sprintf("ID %d", id))
+}
+
+func deletePartByDate(entries []Entry, date string, part int) ([]Entry, bool, error) {
+	return deletePart(entries, part, func(entry Entry) bool {
+		return entry.Date == date
+	}, date)
+}
+
+func deletePart(entries []Entry, part int, match func(Entry) bool, label string) ([]Entry, bool, error) {
 	if part <= 0 {
 		return entries, false, errors.New("削除する項目番号は正の整数で指定してください")
 	}
 
 	for i := range entries {
-		if entries[i].ID != id {
+		if !match(entries[i]) {
 			continue
 		}
 
 		parts := splitEntryText(entries[i].Text)
 		if part > len(parts) {
-			return entries, true, fmt.Errorf("ID %d には %d 番目の項目がありません", id, part)
+			return entries, true, fmt.Errorf("%s には %d 番目の項目がありません", label, part)
 		}
 
 		parts = append(parts[:part-1], parts[part:]...)
@@ -449,6 +506,13 @@ func deletePartByID(entries []Entry, id, part int) ([]Entry, bool, error) {
 	}
 
 	return entries, false, nil
+}
+
+func deleteTargetLabel(opts Options) string {
+	if opts.DeleteDate != "" {
+		return opts.DeleteDate
+	}
+	return fmt.Sprintf("ID %d", opts.DeleteID)
 }
 
 func splitEntryText(text string) []string {
@@ -506,11 +570,18 @@ func printHelp() {
   diary -a "本文"
       今日の日付で追加または上書き
 
+  diary -a yesterday "本文"
+      前日の日付で追加または上書き
+
   diary -a YYYY-MM-DD "本文"
       指定日で追加または上書き
 
   diary -A "本文"
       今日の日付で既存本文の末尾に " / 本文" を追記
+      未登録ならそのまま追加
+
+  diary -A yesterday "本文"
+      前日の日付で既存本文の末尾に " / 本文" を追記
       未登録ならそのまま追加
 
   diary -A YYYY-MM-DD "本文"
@@ -520,9 +591,21 @@ func printHelp() {
   diary -d ID
       指定したシリアル番号の記録を削除
 
+  diary -d today
+      今日の記録を削除
+
+  diary -d yesterday
+      前日の記録を削除
+
   diary -d ID N
       指定したシリアル番号の記録から "/" 区切りの N 番目の項目を削除
       N は 1 から数えます
+
+  diary -d today N
+      今日の記録から "/" 区切りの N 番目の項目を削除
+
+  diary -d yesterday N
+      前日の記録から "/" 区切りの N 番目の項目を削除
 
 設定ファイル:
   ~/.config/diary/config.toml
@@ -1141,8 +1224,38 @@ func isYearMonth(s string) bool {
 	return err == nil
 }
 
+func isAddDateArg(s string) bool {
+	return isDate(s) || s == "yesterday"
+}
+
+func resolveAddDateArg(s string) string {
+	if s == "yesterday" {
+		return yesterdayString()
+	}
+	return s
+}
+
+func isDeleteDateArg(s string) bool {
+	return s == "today" || s == "yesterday"
+}
+
+func resolveDeleteDateArg(s string) string {
+	switch s {
+	case "today":
+		return todayString()
+	case "yesterday":
+		return yesterdayString()
+	default:
+		return s
+	}
+}
+
 func todayString() string {
 	return time.Now().Format("2006-01-02")
+}
+
+func yesterdayString() string {
+	return time.Now().AddDate(0, 0, -1).Format("2006-01-02")
 }
 
 func utf8Len(s string) int {

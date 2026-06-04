@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.5] - 2026-06-04
+
+### Added
+
+- Added `yesterday` for `-a` and `-A` to operate on yesterday's entry.
+- Added `today` and `yesterday` for `-d` to delete today's or yesterday's entry.
+- Added `today` and `yesterday` support for `-d` item deletion, such as `diary -d today 2`.
+
+### Documentation
+
+- Updated the help text and README files to describe `today` and `yesterday`.
+
 ## [0.9.4] - 2026-06-04
 
 ### Added

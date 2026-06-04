@@ -4,7 +4,7 @@ A simple one-line diary application for the command line.
 
 [日本語版 README](README.ja.md)
 
-Current version: `0.9.4`
+Current version: `0.9.5`
 
 [Changelog](CHANGELOG.md)
 
@@ -13,10 +13,12 @@ Each entry is assigned a serial ID, only one entry is stored per date, and exist
 
 ---
 
-## What's New in 0.9.4
+## What's New in 0.9.5
 
-- Added `diary -d ID n` to delete only the nth slash-separated item from an entry
-- Updated the help text and README files to describe the expanded `-d` behavior
+- Added `yesterday` for `-a` and `-A` to operate on yesterday's entry
+- Added `today` and `yesterday` for `-d` to delete today's or yesterday's entry
+- Added `diary -d today n` / `diary -d yesterday n` to delete one item from today's or yesterday's entry
+- Updated the help text and README files to describe `today` / `yesterday`
 
 ---
 
@@ -28,6 +30,7 @@ Each entry is assigned a serial ID, only one entry is stored per date, and exist
 - Automatic serial ID assignment
 - Update an existing entry by writing to the same date
 - Append to an existing entry for the same date
+- Add or append to yesterday's entry with `yesterday`
 - List recent entries
 - List entries for a specific month
 - Search entries case-insensitively
@@ -35,6 +38,7 @@ Each entry is assigned a serial ID, only one entry is stored per date, and exist
 - Show entries in oldest-first or newest-first order
 - Optionally display serial IDs
 - Delete entries by serial ID
+- Delete today's or yesterday's entry with `today` / `yesterday`
 - Delete one slash-separated item from an entry
 - Automatic backup on write
 - Manual backup and restore
@@ -125,6 +129,12 @@ diary -a "A quiet day."
 diary -a 2026-03-25 "Went for a walk."
 ```
 
+### Add or update yesterday's entry
+
+```bash
+diary -a yesterday "Went for a walk."
+```
+
 ### Append to today's entry
 
 ```bash
@@ -137,6 +147,12 @@ If an entry already exists, the result becomes `"existing text / Play"`. If no e
 
 ```bash
 diary -A 2026-03-25 "Play"
+```
+
+### Append to yesterday's entry
+
+```bash
+diary -A yesterday "Play"
 ```
 
 ### List the most recent 7 entries in oldest-first order
@@ -235,10 +251,19 @@ diary -r -n -l 30
 diary -d 3
 ```
 
+### Delete today's or yesterday's entry
+
+```bash
+diary -d today
+diary -d yesterday
+```
+
 ### Delete one slash-separated item
 
 ```bash
 diary -d 101 2
+diary -d today 2
+diary -d yesterday 2
 ```
 
 If the entry text is `a / b / c`, this removes only the second item and leaves `a / c`.
@@ -262,10 +287,16 @@ Item numbers are 1-based. If the specified item does not exist, the data is left
 | `diary -r -n -l [n]`         | List recent entries with serial IDs in newest-first order |
 | `diary -a "text"`            | Add or update today's entry                               |
 | `diary -a YYYY-MM-DD "text"` | Add or update an entry for a specific date                |
+| `diary -a yesterday "text"`  | Add or update yesterday's entry                           |
 | `diary -A "text"`            | Append to today's entry, or create it if missing          |
 | `diary -A YYYY-MM-DD "text"` | Append to an entry for a specific date, or create it      |
+| `diary -A yesterday "text"`  | Append to yesterday's entry, or create it if missing      |
 | `diary -d ID`                | Delete an entry by serial ID                              |
+| `diary -d today`             | Delete today's entry                                      |
+| `diary -d yesterday`         | Delete yesterday's entry                                  |
 | `diary -d ID n`              | Delete the nth slash-separated item from an entry         |
+| `diary -d today n`           | Delete the nth slash-separated item from today's entry    |
+| `diary -d yesterday n`       | Delete the nth slash-separated item from yesterday's entry |
 | `diary -b [path]`            | Create a backup immediately                               |
 | `diary -R`                   | List available backups and prompt for a restore number    |
 | `diary -R backup.jsonl`      | Restore from a backup file                                |
@@ -276,11 +307,15 @@ Item numbers are 1-based. If the specified item does not exist, the data is left
 
 * Only one entry is stored per date.
 * Adding a new entry for an existing date updates the previous one.
+* `diary -a yesterday "text"` adds or updates yesterday's entry.
+* `diary -A yesterday "text"` appends to yesterday's entry.
 * Serial IDs are assigned only when a new entry is first created.
 * Updating an existing entry keeps its original serial ID.
 * Deletion is performed by serial ID.
+* `diary -d today` and `diary -d yesterday` delete today's or yesterday's entry.
 * `diary -d ID n` deletes only the nth item after splitting the entry text by `/`. n is 1-based.
-* If the item specified by `diary -d ID n` does not exist, the data is left unchanged.
+* `diary -d today n` and `diary -d yesterday n` delete only the nth item from today's or yesterday's entry.
+* If the item specified by `diary -d ID n`, `diary -d today n`, or `diary -d yesterday n` does not exist, the data is left unchanged.
 * Text search is case-insensitive.
 * `-i` starts a prompt-based narrowing search loop and exits on an empty line.
 * Add, update, and delete automatically create a timestamped `.jsonl` backup.
