@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.2] - 2026-06-07
+
+### Fixed
+
+- Fixed `diary -v` on Linux by writing calendar HTML to a browser-accessible user directory.
+
 ## [1.0.1] - 2026-06-04
 
 ### Changed

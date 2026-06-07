@@ -4,7 +4,7 @@ A simple one-line diary application for the command line.
 
 [日本語版 README](README.ja.md)
 
-Current version: `1.0.1`
+Current version: `1.0.2`
 
 [Changelog](CHANGELOG.md)
 
@@ -13,9 +13,9 @@ Each entry is assigned a serial ID, only one entry is stored per date, and exist
 
 ---
 
-## What's New in 1.0.1
+## What's New in 1.0.2
 
-- List output such as `diary -l` highlights today's entry when printed directly to a terminal
+- Fixed `diary -v` on Linux by writing calendar HTML to a browser-accessible user directory
 
 ---
 

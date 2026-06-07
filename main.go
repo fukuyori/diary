@@ -22,7 +22,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-const appVersion = "1.0.1"
+const appVersion = "1.0.2"
 const maxBackupHistory = 10
 const backupTimestampLayout = "20060102-150405-000000000"
 const todayHighlightStart = "\x1b[1;33m"
@@ -655,7 +655,11 @@ func runCalendarGUI(entries []Entry, monthArg string, now time.Time) error {
 	}
 	htmlText := buildCalendarHTML(entries, year, month)
 
-	file, err := os.CreateTemp("", fmt.Sprintf("diary-calendar-%04d-%02d-*.html", year, int(month)))
+	dir, err := calendarHTMLDir()
+	if err != nil {
+		return err
+	}
+	file, err := os.CreateTemp(dir, fmt.Sprintf("diary-calendar-%04d-%02d-*.html", year, int(month)))
 	if err != nil {
 		return err
 	}
@@ -669,12 +673,52 @@ func runCalendarGUI(entries []Entry, monthArg string, now time.Time) error {
 		_ = os.Remove(path)
 		return err
 	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		_ = os.Remove(path)
+		return err
+	}
 
 	if err := openInBrowser(path); err != nil {
 		return err
 	}
 	fmt.Printf("カレンダーを開きました: %s\n", path)
 	return nil
+}
+
+func calendarHTMLDir() (string, error) {
+	if runtime.GOOS == "linux" {
+		return linuxCalendarHTMLDir()
+	}
+
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return "", err
+	}
+	dir = filepath.Join(dir, "diary")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+func linuxCalendarHTMLDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+
+	downloads := filepath.Join(home, "Downloads")
+	if info, err := os.Stat(downloads); err == nil && info.IsDir() {
+		return ensureDir(filepath.Join(downloads, "diary"))
+	}
+	return ensureDir(filepath.Join(home, "diary-calendar"))
+}
+
+func ensureDir(dir string) (string, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	return dir, nil
 }
 
 func resolveCalendarMonth(monthArg string, now time.Time) (int, time.Month, error) {

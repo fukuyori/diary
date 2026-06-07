@@ -257,6 +257,46 @@ func TestResolveCalendarMonth(t *testing.T) {
 	}
 }
 
+func TestLinuxCalendarHTMLDirUsesDownloadsWhenAvailable(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	downloads := filepath.Join(dir, "Downloads")
+	if err := os.MkdirAll(downloads, 0o755); err != nil {
+		t.Fatalf("MkdirAll Downloads error: %v", err)
+	}
+
+	got, err := linuxCalendarHTMLDir()
+	if err != nil {
+		t.Fatalf("linuxCalendarHTMLDir returned error: %v", err)
+	}
+
+	want := filepath.Join(downloads, "diary")
+	if got != want {
+		t.Fatalf("unexpected linux calendar HTML dir: got %q want %q", got, want)
+	}
+	if info, err := os.Stat(got); err != nil || !info.IsDir() {
+		t.Fatalf("calendar HTML dir was not created: info=%v err=%v", info, err)
+	}
+}
+
+func TestLinuxCalendarHTMLDirFallsBackToHomeNonHiddenDir(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+
+	got, err := linuxCalendarHTMLDir()
+	if err != nil {
+		t.Fatalf("linuxCalendarHTMLDir returned error: %v", err)
+	}
+
+	want := filepath.Join(dir, "diary-calendar")
+	if got != want {
+		t.Fatalf("unexpected linux calendar HTML fallback dir: got %q want %q", got, want)
+	}
+	if info, err := os.Stat(got); err != nil || !info.IsDir() {
+		t.Fatalf("calendar HTML fallback dir was not created: info=%v err=%v", info, err)
+	}
+}
+
 func TestParseArgsDeletePart(t *testing.T) {
 	opts, showHelp, err := parseArgs([]string{"-d", "101", "2"})
 	if err != nil {
