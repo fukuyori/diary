@@ -4,7 +4,7 @@
 
 [English README](README.md)
 
-現在のバージョン: `1.0.2`
+現在のバージョン: `2.0.0`
 
 [変更履歴](CHANGELOG.md)
 
@@ -13,9 +13,12 @@
 
 ---
 
-## 1.0.2 の更新内容
+## 2.0.0 の更新内容
 
-- Linux で `diary -v` が表示できない問題を修正し、ブラウザから読めるユーザー配下にカレンダー HTML を作成
+- `diary --sync-google [YYYY-MM]` で月単位の日記項目をGoogleカレンダーへ同期できるように変更
+- Googleカレンダー同期では `/` 区切りの1項目ごとに終日イベントを作成
+- `diary -l` などの一覧表示で、端末に直接表示する場合に当日の記録を強調表示
+- 1.0.2 の Linux 向け `diary -v` カレンダーHTML出力修正を含む
 
 ---
 
@@ -39,6 +42,7 @@
 - "/" 区切りの項目だけを指定して削除可能
 - 書き込み時の自動バックアップ
 - 手動バックアップと復元
+- Googleカレンダーへの月単位同期
 - TOML ベースの設定
 
 ---
@@ -65,8 +69,6 @@
 ### ビルド
 
 ```bash
-go mod init diary
-go get github.com/pelletier/go-toml/v2
 go build -o diary .
 ```
 
@@ -80,10 +82,12 @@ go build -o diary.exe .
 
 ## 設定
 
-設定ファイルは次の場所にあります。
+設定ファイルはOSごとのローカル設定ディレクトリにあります。
 
 ```text
-~/.config/diary/config.toml
+macOS: ~/Library/Application Support/diary/config.toml
+Linux: ~/.config/diary/config.toml
+Windows: %LOCALAPPDATA%\diary\config.toml
 ```
 
 例:
@@ -91,12 +95,44 @@ go build -o diary.exe .
 ```toml
 data_file = "C:\\Users\\yourname\\diary\\diary.jsonl"
 max_len = 200
+google_calendar_id = "primary"
+google_credentials_file = "~/Library/Application Support/diary/google_credentials.json"
+google_token_file = "~/Library/Application Support/diary/google_token.json"
 ```
 
 ### 設定項目
 
 * `data_file`: JSONL データファイルのパス
 * `max_len`: 1 件の本文に許可する最大文字数
+* `google_calendar_id`: 同期先のGoogleカレンダーID。通常は `primary`
+* `google_credentials_file`: Google Cloud Console で作成したOAuthクライアントJSONのパス
+* `google_token_file`: 初回認証後に保存するOAuthトークンのパス
+
+---
+
+## Googleカレンダー同期の準備
+
+Googleカレンダー同期を使う場合は、初回実行前にGoogle Cloud ConsoleでOAuthクライアントを作成します。
+
+1. Google Cloud Consoleでプロジェクトを作成または選択します。
+2. Google Calendar APIを有効化します。
+3. Google Auth Platformの同意画面を設定します。
+4. Google Auth Platformの「対象」で、自分のGoogleアカウントをテストユーザーに追加します。
+5. Google Auth Platformの「クライアント」で、種類を「デスクトップアプリ」にしてOAuthクライアントを作成します。
+6. ダウンロードしたJSONを `google_credentials_file` の場所に保存します。
+
+macOSの例:
+
+```bash
+mkdir -p "$HOME/Library/Application Support/diary"
+mv ~/Downloads/client_secret_*.json "$HOME/Library/Application Support/diary/google_credentials.json"
+chmod 600 "$HOME/Library/Application Support/diary/google_credentials.json"
+```
+
+初回の `diary --sync-google` では認証URLが表示されます。ブラウザで許可すると、一時的に起動したローカルサーバーが認証結果を受け取り、`google_token_file` にトークンを保存します。
+`google_token_file` は手で作る必要はありません。
+
+個人利用の未審査アプリでは、Googleの警告画面が表示されることがあります。自分で作成したプロジェクトで、テストユーザーに自分のアカウントを追加している場合は、詳細表示から続行できます。
 
 ---
 
@@ -122,6 +158,17 @@ diary -v 2026-03
 ```bash
 diary --version
 ```
+
+### Googleカレンダーに同期
+
+```bash
+diary --sync-google
+diary --sync-google 2026-03
+```
+
+当月または指定年月の日記を確認し、本文を `/` で区切った1項目ごとに終日イベントを作成します。
+Googleイベントには `diary_app=diary`、`diary_date=YYYY-MM-DD`、`diary_item_key` を保存するため、同じ月を再同期しても同じ項目は重複登録しません。
+初回実行時は表示されたGoogle認証URLを開き、ブラウザで許可します。
 
 ### 今日の日記を追加
 
@@ -284,6 +331,7 @@ diary -d yesterday 2
 | `diary` | ヘルプを表示 |
 | `diary -v [YYYY-MM]` | GUIで当月または指定年月のカレンダーを表示 |
 | `diary --version` | バージョンを表示 |
+| `diary --sync-google [YYYY-MM]` | 当月または指定年月の日記項目をGoogleカレンダーに同期 |
 | `diary -l [n]` | 直近の記録を古い順で表示 |
 | `diary -m YYYY-MM -l [n]` | 指定した年月の記録を表示 |
 | `diary -s "query"` | 大文字小文字を区別せず検索 |
@@ -335,6 +383,8 @@ diary -d yesterday 2
 * `-R` は引数なしだと日時と件数付きのバックアップ一覧を表示し、そのまま復元する番号の入力を求めます。
 * `-R backup.jsonl` はバックアップファイルから復元し、実行前に現在データを安全用バックアップとして保存し、`diary` の確認入力を要求します。
 * `diary -l` などの一覧表示では、端末に直接表示する場合に当日の記録を強調表示します。
+* `--sync-google` は対象月のGoogleカレンダーを確認し、本文の `/` 区切り1項目ごとに未登録分だけを終日イベントとして作成します。
+* 以前のバージョンで作成した日付ごとの日記イベントは、項目単位の重複判定には使われません。
 
 ---
 

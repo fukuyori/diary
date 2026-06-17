@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -120,6 +121,70 @@ func TestFormatEntryLineDoesNotHighlightWhenDisabled(t *testing.T) {
 	}
 }
 
+type fakeCalendarSyncClient struct {
+	registered map[string]bool
+	inserted   []CalendarSyncItem
+}
+
+func (c *fakeCalendarSyncClient) ListDiaryItemKeys(ctx context.Context, start, end time.Time) (map[string]bool, error) {
+	out := make(map[string]bool)
+	for key, registered := range c.registered {
+		out[key] = registered
+	}
+	return out, nil
+}
+
+func (c *fakeCalendarSyncClient) InsertDiaryItem(ctx context.Context, item CalendarSyncItem) error {
+	c.inserted = append(c.inserted, item)
+	return nil
+}
+
+func TestSyncEntriesToCalendarCreatesOnlyMissingMonthItems(t *testing.T) {
+	registeredKey := diarySyncItemKey("2026-06-02", 1, "existing")
+	client := &fakeCalendarSyncClient{
+		registered: map[string]bool{registeredKey: true},
+	}
+	entries := []Entry{
+		{ID: 1, Date: "2026-06-01", Text: "new / walk"},
+		{ID: 2, Date: "2026-06-02", Text: "existing"},
+		{ID: 3, Date: "2026-07-01", Text: "outside"},
+		{ID: 4, Date: "2026-06-03", Text: "   "},
+	}
+
+	result, err := syncEntriesToCalendar(context.Background(), client, entries, 2026, time.June)
+	if err != nil {
+		t.Fatalf("syncEntriesToCalendar returned error: %v", err)
+	}
+	if result.Total != 3 || result.Existing != 1 || result.Created != 2 {
+		t.Fatalf("unexpected sync result: %+v", result)
+	}
+	if len(client.inserted) != 2 {
+		t.Fatalf("unexpected inserted item count: %+v", client.inserted)
+	}
+	if client.inserted[0].Date != "2026-06-01" || client.inserted[0].Part != 1 || client.inserted[0].Text != "new" {
+		t.Fatalf("unexpected first inserted item: %+v", client.inserted[0])
+	}
+	if client.inserted[1].Date != "2026-06-01" || client.inserted[1].Part != 2 || client.inserted[1].Text != "walk" {
+		t.Fatalf("unexpected second inserted item: %+v", client.inserted[1])
+	}
+}
+
+func TestDiarySyncItemsForMonthSplitsSlashSeparatedItems(t *testing.T) {
+	items := diarySyncItemsForMonth([]Entry{
+		{ID: 1, Date: "2026-06-01", Text: "a / b / c"},
+		{ID: 2, Date: "2026-07-01", Text: "outside"},
+	}, 2026, time.June)
+
+	if len(items) != 3 {
+		t.Fatalf("unexpected item count: %+v", items)
+	}
+	for i, want := range []string{"a", "b", "c"} {
+		if items[i].Text != want || items[i].Part != i+1 || items[i].Date != "2026-06-01" || items[i].Key == "" {
+			t.Fatalf("unexpected item %d: %+v", i, items[i])
+		}
+	}
+}
+
 func TestResolveBackupPathUsesDirectoryWhenNoExtension(t *testing.T) {
 	dataFile := filepath.Join("data", "diary.jsonl")
 	got, err := resolveBackupPath(dataFile, filepath.Join("tmp", "backups"))
@@ -148,6 +213,30 @@ func TestPlatformBackupDirLinux(t *testing.T) {
 	want := filepath.Join("/home/me", ".local", "share", "diary", "backups")
 	if got != want {
 		t.Fatalf("unexpected linux backup dir: got %q want %q", got, want)
+	}
+}
+
+func TestPlatformConfigDirMacOS(t *testing.T) {
+	got := platformConfigDir("darwin", "/Users/me", "")
+	want := filepath.Join("/Users/me", "Library", "Application Support", "diary")
+	if got != want {
+		t.Fatalf("unexpected macOS config dir: got %q want %q", got, want)
+	}
+}
+
+func TestPlatformConfigDirLinux(t *testing.T) {
+	got := platformConfigDir("linux", "/home/me", "")
+	want := filepath.Join("/home/me", ".config", "diary")
+	if got != want {
+		t.Fatalf("unexpected linux config dir: got %q want %q", got, want)
+	}
+}
+
+func TestPlatformConfigDirWindows(t *testing.T) {
+	got := platformConfigDir("windows", `C:\Users\me`, `C:\Users\me\AppData\Local`)
+	want := filepath.Join(`C:\Users\me\AppData\Local`, "diary")
+	if got != want {
+		t.Fatalf("unexpected windows config dir: got %q want %q", got, want)
 	}
 }
 
@@ -207,6 +296,46 @@ func TestParseArgsCalendarRejectsInvalidMonth(t *testing.T) {
 	_, _, err := parseArgs([]string{"-v", "2026-13"})
 	if err == nil {
 		t.Fatal("expected parseArgs to reject invalid calendar month")
+	}
+}
+
+func TestParseArgsGoogleSync(t *testing.T) {
+	opts, showHelp, err := parseArgs([]string{"--sync-google"})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+	if showHelp {
+		t.Fatal("expected showHelp=false")
+	}
+	if !opts.GoogleSync || opts.GoogleSyncMonth != "" {
+		t.Fatalf("unexpected google sync opts: %+v", opts)
+	}
+}
+
+func TestParseArgsGoogleSyncWithMonth(t *testing.T) {
+	opts, showHelp, err := parseArgs([]string{"--sync-google", "2026-06"})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+	if showHelp {
+		t.Fatal("expected showHelp=false")
+	}
+	if !opts.GoogleSync || opts.GoogleSyncMonth != "2026-06" {
+		t.Fatalf("unexpected google sync opts: %+v", opts)
+	}
+}
+
+func TestParseArgsGoogleSyncRejectsInvalidMonth(t *testing.T) {
+	_, _, err := parseArgs([]string{"--sync-google", "2026-13"})
+	if err == nil {
+		t.Fatal("expected parseArgs to reject invalid google sync month")
+	}
+}
+
+func TestParseArgsGoogleSyncRejectsMixedOptions(t *testing.T) {
+	_, _, err := parseArgs([]string{"--sync-google", "-l"})
+	if err == nil {
+		t.Fatal("expected parseArgs to reject mixed google sync options")
 	}
 }
 

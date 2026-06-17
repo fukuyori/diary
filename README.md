@@ -4,7 +4,7 @@ A simple one-line diary application for the command line.
 
 [日本語版 README](README.ja.md)
 
-Current version: `1.0.2`
+Current version: `2.0.0`
 
 [Changelog](CHANGELOG.md)
 
@@ -13,9 +13,12 @@ Each entry is assigned a serial ID, only one entry is stored per date, and exist
 
 ---
 
-## What's New in 1.0.2
+## What's New in 2.0.0
 
-- Fixed `diary -v` on Linux by writing calendar HTML to a browser-accessible user directory
+- Added `diary --sync-google [YYYY-MM]` to create missing monthly diary item events in Google Calendar
+- Google Calendar sync creates one all-day event for each `/` separated diary item
+- List output such as `diary -l` highlights today's entry when printed directly to a terminal
+- Includes the Linux `diary -v` calendar HTML output fix from 1.0.2
 
 ---
 
@@ -39,6 +42,7 @@ Each entry is assigned a serial ID, only one entry is stored per date, and exist
 - Delete one slash-separated item from an entry
 - Automatic backup on write
 - Manual backup and restore
+- Month-based Google Calendar sync
 - TOML-based configuration
 
 ---
@@ -65,8 +69,6 @@ Example:
 ### Build
 
 ```bash
-go mod init diary
-go get github.com/pelletier/go-toml/v2
 go build -o diary .
 ```
 
@@ -80,10 +82,12 @@ go build -o diary.exe .
 
 ## Configuration
 
-The application uses a TOML configuration file:
+The application uses a TOML configuration file in the OS-local configuration directory:
 
 ```text
-~/.config/diary/config.toml
+macOS: ~/Library/Application Support/diary/config.toml
+Linux: ~/.config/diary/config.toml
+Windows: %LOCALAPPDATA%\diary\config.toml
 ```
 
 Example:
@@ -91,12 +95,44 @@ Example:
 ```toml
 data_file = "C:\\Users\\yourname\\diary\\diary.jsonl"
 max_len = 200
+google_calendar_id = "primary"
+google_credentials_file = "~/Library/Application Support/diary/google_credentials.json"
+google_token_file = "~/Library/Application Support/diary/google_token.json"
 ```
 
 ### Options
 
 * `data_file`: path to the JSONL data file
 * `max_len`: maximum number of characters allowed in one entry
+* `google_calendar_id`: target Google Calendar ID. Use `primary` for the primary calendar
+* `google_credentials_file`: path to the OAuth client JSON created in Google Cloud Console
+* `google_token_file`: path where the OAuth token is saved after the first authorization
+
+---
+
+## Google Calendar Sync Setup
+
+To use Google Calendar sync, create an OAuth client in Google Cloud Console before the first run.
+
+1. Create or select a project in Google Cloud Console.
+2. Enable the Google Calendar API.
+3. Configure the Google Auth Platform consent screen.
+4. In Google Auth Platform > Audience, add your Google account as a test user.
+5. In Google Auth Platform > Clients, create an OAuth client with the application type set to Desktop app.
+6. Save the downloaded JSON file to the path configured by `google_credentials_file`.
+
+macOS example:
+
+```bash
+mkdir -p "$HOME/Library/Application Support/diary"
+mv ~/Downloads/client_secret_*.json "$HOME/Library/Application Support/diary/google_credentials.json"
+chmod 600 "$HOME/Library/Application Support/diary/google_credentials.json"
+```
+
+The first `diary --sync-google` run prints an authorization URL. After you allow access in the browser, a temporary local server receives the callback and saves the token to `google_token_file`.
+You do not need to create `google_token_file` manually.
+
+For a personal unverified app, Google may show a warning. If this is your own Cloud project and you added your account as a test user, open the advanced details and continue.
 
 ---
 
@@ -122,6 +158,17 @@ This opens a browser calendar for the current or specified month and shows regis
 ```bash
 diary --version
 ```
+
+### Sync to Google Calendar
+
+```bash
+diary --sync-google
+diary --sync-google 2026-03
+```
+
+This checks the current or specified month and creates one all-day Google Calendar event for each `/` separated diary item.
+Google events store `diary_app=diary`, `diary_date=YYYY-MM-DD`, and `diary_item_key`, so running sync again for the same month does not duplicate the same item.
+On the first run, open the printed Google authorization URL and allow access in the browser.
 
 ### Add an entry for today
 
@@ -284,6 +331,7 @@ Item numbers are 1-based. If the specified item does not exist, the data is left
 | `diary`                      | Show help                                                 |
 | `diary -v [YYYY-MM]`         | Show a calendar for the current or specified month in a GUI |
 | `diary --version`            | Show version                                              |
+| `diary --sync-google [YYYY-MM]` | Sync diary items for the current or specified month to Google Calendar |
 | `diary -l [n]`               | List recent entries in oldest-first order                 |
 | `diary -m YYYY-MM -l [n]`    | List entries for the specified year and month             |
 | `diary -s "query"`           | Search entries case-insensitively                         |
@@ -335,6 +383,8 @@ Item numbers are 1-based. If the specified item does not exist, the data is left
 * `-R` with no argument lists numbered backups with timestamp and record count, then asks for the number to restore.
 * `-R backup.jsonl` restores from a backup file, first saves the current data as a safety backup, and requires typing `diary` to proceed.
 * List output such as `diary -l` highlights today's entry when printed directly to a terminal.
+* `--sync-google` checks the target month in Google Calendar and creates only missing `/` separated diary items as all-day events.
+* Date-level diary events created by earlier versions are not used for item-level duplicate detection.
 
 ---
 

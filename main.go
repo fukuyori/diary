@@ -5,11 +5,18 @@ package main
 
 import (
 	"bufio"
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,9 +27,13 @@ import (
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
+	"google.golang.org/api/calendar/v3"
+	"google.golang.org/api/option"
 )
 
-const appVersion = "1.0.2"
+const appVersion = "2.0.0"
 const maxBackupHistory = 10
 const backupTimestampLayout = "20060102-150405-000000000"
 const todayHighlightStart = "\x1b[1;33m"
@@ -44,8 +55,11 @@ type Entry struct {
 }
 
 type Config struct {
-	DataFile string `toml:"data_file"`
-	MaxLen   int    `toml:"max_len"`
+	DataFile              string `toml:"data_file"`
+	MaxLen                int    `toml:"max_len"`
+	GoogleCalendarID      string `toml:"google_calendar_id"`
+	GoogleCredentialsFile string `toml:"google_credentials_file"`
+	GoogleTokenFile       string `toml:"google_token_file"`
 }
 
 type Options struct {
@@ -65,6 +79,8 @@ type Options struct {
 	Version           bool
 	Calendar          bool
 	CalendarMonth     string
+	GoogleSync        bool
+	GoogleSyncMonth   string
 
 	Add     bool
 	Append  bool
@@ -102,6 +118,11 @@ func main() {
 	}
 
 	switch {
+	case opts.GoogleSync:
+		if err := runGoogleSync(context.Background(), entries, cfg, opts.GoogleSyncMonth, time.Now(), os.Stdin, os.Stdout); err != nil {
+			exitErr("Googleカレンダー同期エラー: %v", err)
+		}
+
 	case opts.Calendar:
 		if err := runCalendarGUI(entries, opts.CalendarMonth, time.Now()); err != nil {
 			exitErr("カレンダー表示エラー: %v", err)
@@ -210,6 +231,16 @@ func parseArgs(args []string) (Options, bool, error) {
 		case "-h", "--help":
 			return opts, true, nil
 
+		case "--sync-google":
+			opts.GoogleSync = true
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				if !isYearMonth(args[i+1]) {
+					return opts, false, errors.New("--sync-google の年月は YYYY-MM 形式で指定してください")
+				}
+				opts.GoogleSyncMonth = args[i+1]
+				i++
+			}
+
 		case "-v", "--version":
 			if arg == "--version" {
 				opts.Version = true
@@ -275,7 +306,7 @@ func parseArgs(args []string) (Options, bool, error) {
 			}
 
 		case "-a":
-			if opts.Append || opts.Delete || opts.List || opts.Search || opts.InteractiveSearch || opts.Backup || opts.Restore {
+			if opts.Append || opts.Delete || opts.List || opts.Search || opts.InteractiveSearch || opts.Backup || opts.Restore || opts.GoogleSync {
 				return opts, false, errors.New("-a は -A、一覧・検索・削除・バックアップ・復元系のオプションと同時に使えません")
 			}
 			opts.Add = true
@@ -314,7 +345,7 @@ func parseArgs(args []string) (Options, bool, error) {
 			return opts, false, nil
 
 		case "-A":
-			if opts.Add || opts.Delete || opts.List || opts.Search || opts.InteractiveSearch || opts.Backup || opts.Restore {
+			if opts.Add || opts.Delete || opts.List || opts.Search || opts.InteractiveSearch || opts.Backup || opts.Restore || opts.GoogleSync {
 				return opts, false, errors.New("-A は -a、一覧・検索・削除・バックアップ・復元系のオプションと同時に使えません")
 			}
 			opts.Append = true
@@ -353,7 +384,7 @@ func parseArgs(args []string) (Options, bool, error) {
 			return opts, false, nil
 
 		case "-d":
-			if opts.Add || opts.Append || opts.List || opts.Search || opts.InteractiveSearch || opts.Backup || opts.Restore {
+			if opts.Add || opts.Append || opts.List || opts.Search || opts.InteractiveSearch || opts.Backup || opts.Restore || opts.GoogleSync {
 				return opts, false, errors.New("-d は追加・追記・一覧・検索・バックアップ・復元系のオプションと同時に使えません")
 			}
 			opts.Delete = true
@@ -410,11 +441,14 @@ func parseArgs(args []string) (Options, bool, error) {
 	if opts.Backup && (opts.Add || opts.Append || opts.Delete) {
 		return opts, false, errors.New("-b は -a、-A、-d と同時に使えません")
 	}
-	if opts.Version && (opts.Add || opts.Append || opts.Delete || opts.List || opts.Search || opts.InteractiveSearch || opts.Backup || opts.Restore || opts.Calendar || opts.ListMonth != "" || opts.Reverse || opts.Numbered || opts.ListLimitSet) {
+	if opts.Version && (opts.Add || opts.Append || opts.Delete || opts.List || opts.Search || opts.InteractiveSearch || opts.Backup || opts.Restore || opts.Calendar || opts.GoogleSync || opts.ListMonth != "" || opts.Reverse || opts.Numbered || opts.ListLimitSet) {
 		return opts, false, errors.New("--version は単独で使ってください")
 	}
-	if opts.Calendar && (opts.Add || opts.Append || opts.Delete || opts.List || opts.Search || opts.InteractiveSearch || opts.Backup || opts.Restore || opts.Version || opts.ListMonth != "" || opts.Reverse || opts.Numbered || opts.ListLimitSet) {
+	if opts.Calendar && (opts.Add || opts.Append || opts.Delete || opts.List || opts.Search || opts.InteractiveSearch || opts.Backup || opts.Restore || opts.Version || opts.GoogleSync || opts.ListMonth != "" || opts.Reverse || opts.Numbered || opts.ListLimitSet) {
 		return opts, false, errors.New("-v は単独で使ってください")
+	}
+	if opts.GoogleSync && (opts.Add || opts.Append || opts.Delete || opts.List || opts.Search || opts.InteractiveSearch || opts.Backup || opts.Restore || opts.Version || opts.Calendar || opts.ListMonth != "" || opts.Reverse || opts.Numbered || opts.ListLimitSet) {
+		return opts, false, errors.New("--sync-google は単独で使ってください")
 	}
 	if opts.Restore && (opts.List || opts.Search || opts.InteractiveSearch || opts.ListMonth != "" || opts.Reverse || opts.Numbered) {
 		return opts, false, errors.New("-R は一覧・検索系のオプションと同時に使えません")
@@ -562,6 +596,10 @@ func printHelp() {
   diary --version
       バージョンを表示
 
+  diary --sync-google [YYYY-MM]
+      当月または指定年月の日記をGoogleカレンダーに同期
+      "/" 区切りの未登録項目だけ終日イベントとして作成
+
   diary -l [件数]
       直近の記録を古いもの順で表示
       件数省略時は 7
@@ -636,16 +674,360 @@ func printHelp() {
       前日の記録から "/" 区切りの N 番目の項目を削除
 
 設定ファイル:
-  ~/.config/diary/config.toml
+  macOS: ~/Library/Application Support/diary/config.toml
+  Linux: ~/.config/diary/config.toml
+  Windows: %%LOCALAPPDATA%%\diary\config.toml
 
 設定例:
   data_file = "C:\\Users\\yourname\\diary\\diary.jsonl"
   max_len = 200
+  google_calendar_id = "primary"
 `, appVersion)
 }
 
 func printVersion() {
 	fmt.Printf("diary v%s\n", appVersion)
+}
+
+type CalendarSyncClient interface {
+	ListDiaryItemKeys(ctx context.Context, start, end time.Time) (map[string]bool, error)
+	InsertDiaryItem(ctx context.Context, item CalendarSyncItem) error
+}
+
+func runGoogleSync(ctx context.Context, entries []Entry, cfg Config, monthArg string, now time.Time, in io.Reader, out io.Writer) error {
+	year, month, err := resolveCalendarMonth(monthArg, now)
+	if err != nil {
+		return err
+	}
+
+	client, err := newGoogleCalendarClient(ctx, cfg, in, out)
+	if err != nil {
+		return err
+	}
+
+	result, err := syncEntriesToCalendar(ctx, client, entries, year, month)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(out, "%04d-%02d の同期: 対象 %d件、登録済み %d件、新規登録 %d件\n", year, int(month), result.Total, result.Existing, result.Created)
+	return nil
+}
+
+type CalendarSyncResult struct {
+	Total    int
+	Existing int
+	Created  int
+}
+
+type CalendarSyncItem struct {
+	EntryID int
+	Date    string
+	Part    int
+	Text    string
+	Key     string
+}
+
+func syncEntriesToCalendar(ctx context.Context, client CalendarSyncClient, entries []Entry, year int, month time.Month) (CalendarSyncResult, error) {
+	monthItems := diarySyncItemsForMonth(entries, year, month)
+	start, end := monthTimeRange(year, month)
+	registered, err := client.ListDiaryItemKeys(ctx, start, end)
+	if err != nil {
+		return CalendarSyncResult{}, err
+	}
+
+	result := CalendarSyncResult{Total: len(monthItems)}
+	for _, item := range monthItems {
+		if registered[item.Key] {
+			result.Existing++
+			continue
+		}
+		if err := client.InsertDiaryItem(ctx, item); err != nil {
+			return result, err
+		}
+		registered[item.Key] = true
+		result.Created++
+	}
+	return result, nil
+}
+
+func entriesForMonth(entries []Entry, year int, month time.Month) []Entry {
+	prefix := fmt.Sprintf("%04d-%02d-", year, int(month))
+	out := make([]Entry, 0)
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Date, prefix) && strings.TrimSpace(entry.Text) != "" {
+			out = append(out, entry)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Date == out[j].Date {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].Date < out[j].Date
+	})
+	return out
+}
+
+func diarySyncItemsForMonth(entries []Entry, year int, month time.Month) []CalendarSyncItem {
+	monthEntries := entriesForMonth(entries, year, month)
+	items := make([]CalendarSyncItem, 0)
+	for _, entry := range monthEntries {
+		partNumber := 0
+		for _, part := range splitEntryText(entry.Text) {
+			if part == "" {
+				continue
+			}
+			partNumber++
+			items = append(items, CalendarSyncItem{
+				EntryID: entry.ID,
+				Date:    entry.Date,
+				Part:    partNumber,
+				Text:    part,
+				Key:     diarySyncItemKey(entry.Date, partNumber, part),
+			})
+		}
+	}
+	return items
+}
+
+func diarySyncItemKey(date string, part int, text string) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d\x00%s", date, part, strings.TrimSpace(text))))
+	return hex.EncodeToString(sum[:])
+}
+
+func monthTimeRange(year int, month time.Month) (time.Time, time.Time) {
+	start := time.Date(year, month, 1, 0, 0, 0, 0, time.Local)
+	return start, start.AddDate(0, 1, 0)
+}
+
+type GoogleCalendarClient struct {
+	service    *calendar.Service
+	calendarID string
+}
+
+func newGoogleCalendarClient(ctx context.Context, cfg Config, in io.Reader, out io.Writer) (*GoogleCalendarClient, error) {
+	credentialsPath := expandHomePath(cfg.GoogleCredentialsFile)
+	tokenPath := expandHomePath(cfg.GoogleTokenFile)
+	if strings.TrimSpace(credentialsPath) == "" {
+		return nil, errors.New("google_credentials_file が設定されていません")
+	}
+	if strings.TrimSpace(tokenPath) == "" {
+		return nil, errors.New("google_token_file が設定されていません")
+	}
+
+	credentials, err := os.ReadFile(credentialsPath)
+	if err != nil {
+		return nil, fmt.Errorf("Google OAuth認証情報を読み込めません: %w", err)
+	}
+	oauthConfig, err := google.ConfigFromJSON(credentials, calendar.CalendarEventsScope)
+	if err != nil {
+		return nil, fmt.Errorf("Google OAuth認証情報を解析できません: %w", err)
+	}
+
+	httpClient, err := oauthHTTPClient(ctx, oauthConfig, tokenPath, in, out)
+	if err != nil {
+		return nil, err
+	}
+	service, err := calendar.NewService(ctx, option.WithHTTPClient(httpClient))
+	if err != nil {
+		return nil, err
+	}
+
+	calendarID := strings.TrimSpace(cfg.GoogleCalendarID)
+	if calendarID == "" {
+		calendarID = "primary"
+	}
+	return &GoogleCalendarClient{
+		service:    service,
+		calendarID: calendarID,
+	}, nil
+}
+
+func (c *GoogleCalendarClient) ListDiaryItemKeys(ctx context.Context, start, end time.Time) (map[string]bool, error) {
+	registered := make(map[string]bool)
+	call := c.service.Events.List(c.calendarID).
+		Context(ctx).
+		ShowDeleted(false).
+		SingleEvents(true).
+		TimeMin(start.Format(time.RFC3339)).
+		TimeMax(end.Format(time.RFC3339)).
+		PrivateExtendedProperty("diary_app=diary")
+
+	pageToken := ""
+	for {
+		if pageToken != "" {
+			call.PageToken(pageToken)
+		}
+		events, err := call.Do()
+		if err != nil {
+			return nil, err
+		}
+		for _, event := range events.Items {
+			if event.ExtendedProperties == nil || event.ExtendedProperties.Private == nil {
+				continue
+			}
+			key := event.ExtendedProperties.Private["diary_item_key"]
+			if key != "" {
+				registered[key] = true
+			}
+		}
+		if events.NextPageToken == "" {
+			return registered, nil
+		}
+		pageToken = events.NextPageToken
+	}
+}
+
+func (c *GoogleCalendarClient) InsertDiaryItem(ctx context.Context, item CalendarSyncItem) error {
+	start, err := time.Parse("2006-01-02", item.Date)
+	if err != nil {
+		return err
+	}
+	end := start.AddDate(0, 0, 1)
+	event := &calendar.Event{
+		Summary:     item.Text,
+		Description: fmt.Sprintf("diary %s", item.Date),
+		Start:       &calendar.EventDateTime{Date: item.Date},
+		End:         &calendar.EventDateTime{Date: end.Format("2006-01-02")},
+		ExtendedProperties: &calendar.EventExtendedProperties{
+			Private: map[string]string{
+				"diary_app":      "diary",
+				"diary_id":       strconv.Itoa(item.EntryID),
+				"diary_date":     item.Date,
+				"diary_part":     strconv.Itoa(item.Part),
+				"diary_item_key": item.Key,
+			},
+		},
+	}
+	_, err = c.service.Events.Insert(c.calendarID, event).Context(ctx).Do()
+	return err
+}
+
+func oauthHTTPClient(ctx context.Context, oauthConfig *oauth2.Config, tokenPath string, in io.Reader, out io.Writer) (*http.Client, error) {
+	token, err := tokenFromFile(tokenPath)
+	if err != nil {
+		token, err = tokenFromWeb(oauthConfig, in, out)
+		if err != nil {
+			return nil, err
+		}
+		if err := saveToken(tokenPath, token); err != nil {
+			return nil, err
+		}
+	}
+	return oauthConfig.Client(ctx, token), nil
+}
+
+func tokenFromFile(path string) (*oauth2.Token, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var token oauth2.Token
+	if err := json.NewDecoder(file).Decode(&token); err != nil {
+		return nil, err
+	}
+	return &token, nil
+}
+
+func tokenFromWeb(oauthConfig *oauth2.Config, _ io.Reader, out io.Writer) (*oauth2.Token, error) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, fmt.Errorf("ローカル認証サーバーを開始できません: %w", err)
+	}
+
+	state, err := randomOAuthState()
+	if err != nil {
+		listener.Close()
+		return nil, err
+	}
+
+	localConfig := *oauthConfig
+	localConfig.RedirectURL = "http://" + listener.Addr().String() + "/oauth2callback"
+
+	codeCh := make(chan string, 1)
+	errCh := make(chan error, 1)
+	mux := http.NewServeMux()
+	server := &http.Server{Handler: mux}
+	mux.HandleFunc("/oauth2callback", func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("state"); got != state {
+			http.Error(w, "invalid state", http.StatusBadRequest)
+			sendOAuthError(errCh, errors.New("Google認証のstateが一致しません"))
+			return
+		}
+		if oauthErr := r.URL.Query().Get("error"); oauthErr != "" {
+			http.Error(w, oauthErr, http.StatusBadRequest)
+			sendOAuthError(errCh, fmt.Errorf("Google認証が拒否されました: %s", oauthErr))
+			return
+		}
+		code := strings.TrimSpace(r.URL.Query().Get("code"))
+		if code == "" {
+			http.Error(w, "missing code", http.StatusBadRequest)
+			sendOAuthError(errCh, errors.New("Google認証コードを受け取れませんでした"))
+			return
+		}
+
+		fmt.Fprintln(w, "認証しました。このウィンドウを閉じてdiaryに戻ってください。")
+		codeCh <- code
+	})
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			sendOAuthError(errCh, err)
+		}
+	}()
+	defer shutdownOAuthServer(server)
+
+	authURL := localConfig.AuthCodeURL(state, oauth2.AccessTypeOffline)
+	fmt.Fprintf(out, "Google認証URLを開いて許可してください:\n%s\n", authURL)
+
+	var code string
+	select {
+	case code = <-codeCh:
+	case err := <-errCh:
+		return nil, err
+	case <-time.After(5 * time.Minute):
+		return nil, errors.New("Google認証がタイムアウトしました")
+	}
+
+	token, err := localConfig.Exchange(context.Background(), code)
+	if err != nil {
+		return nil, fmt.Errorf("Google認証コードをトークンに交換できません: %w", err)
+	}
+	return token, nil
+}
+
+func randomOAuthState() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("Google認証stateを生成できません: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+func sendOAuthError(errCh chan<- error, err error) {
+	select {
+	case errCh <- err:
+	default:
+	}
+}
+
+func shutdownOAuthServer(server *http.Server) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_ = server.Shutdown(ctx)
+}
+
+func saveToken(path string, token *oauth2.Token) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return json.NewEncoder(file).Encode(token)
 }
 
 func runCalendarGUI(entries []Entry, monthArg string, now time.Time) error {
@@ -1521,11 +1903,33 @@ func exitErr(format string, args ...any) {
 }
 
 func configFilePath() (string, error) {
+	configDir, err := configDirPath()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(configDir, "config.toml"), nil
+}
+
+func configDirPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".config", "diary", "config.toml"), nil
+	return platformConfigDir(runtime.GOOS, home, os.Getenv("LOCALAPPDATA")), nil
+}
+
+func platformConfigDir(goos, home, localAppData string) string {
+	switch goos {
+	case "windows":
+		if strings.TrimSpace(localAppData) != "" {
+			return filepath.Join(localAppData, "diary")
+		}
+		return filepath.Join(home, "AppData", "Local", "diary")
+	case "darwin":
+		return filepath.Join(home, "Library", "Application Support", "diary")
+	default:
+		return filepath.Join(home, ".config", "diary")
+	}
 }
 
 func defaultDataFilePath() (string, error) {
@@ -1541,10 +1945,36 @@ func defaultConfig() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	configDir, err := configDirPath()
+	if err != nil {
+		return Config{}, err
+	}
 	return Config{
-		DataFile: dataFile,
-		MaxLen:   200,
+		DataFile:              dataFile,
+		MaxLen:                200,
+		GoogleCalendarID:      "primary",
+		GoogleCredentialsFile: filepath.Join(configDir, "google_credentials.json"),
+		GoogleTokenFile:       filepath.Join(configDir, "google_token.json"),
 	}, nil
+}
+
+func expandHomePath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "~" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return path
+		}
+		return home
+	}
+	if strings.HasPrefix(path, "~/") || strings.HasPrefix(path, `~\`) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return path
+		}
+		return filepath.Join(home, path[2:])
+	}
+	return path
 }
 
 func normalizeDataFile(path string) string {
@@ -1604,6 +2034,19 @@ func loadConfig() (Config, error) {
 	}
 	if cfg.MaxLen <= 0 {
 		cfg.MaxLen = 200
+	}
+	if strings.TrimSpace(cfg.GoogleCalendarID) == "" {
+		cfg.GoogleCalendarID = "primary"
+	}
+	defaults, err := defaultConfig()
+	if err != nil {
+		return Config{}, err
+	}
+	if strings.TrimSpace(cfg.GoogleCredentialsFile) == "" {
+		cfg.GoogleCredentialsFile = defaults.GoogleCredentialsFile
+	}
+	if strings.TrimSpace(cfg.GoogleTokenFile) == "" {
+		cfg.GoogleTokenFile = defaults.GoogleTokenFile
 	}
 
 	cfg.DataFile = normalizeDataFile(cfg.DataFile)

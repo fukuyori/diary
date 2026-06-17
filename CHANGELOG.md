@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.0] - 2026-06-17
+
+### Added
+
+- Added `diary --sync-google [YYYY-MM]` to sync diary items to Google Calendar.
+- Added Google OAuth configuration support.
+
+### Changed
+
+- Google Calendar sync creates one all-day event for each slash-separated diary item.
+- macOS config files now use `~/Library/Application Support/diary/config.toml`.
+- List output such as `diary -l` highlights today's entry when printed directly to a terminal.
+
+### Fixed
+
+- Includes the Linux `diary -v` calendar HTML output fix from 1.0.2.
+
+### Documentation
+
+- Added Google Calendar OAuth setup instructions.
+- Updated first-run sync documentation for the local OAuth callback flow.
+
 ## [1.0.2] - 2026-06-07
 
 ### Fixed
@@ -10,9 +32,14 @@ All notable changes to this project will be documented in this file.
 
 ## [1.0.1] - 2026-06-04
 
+### Added
+
+- Added `diary --sync-google [YYYY-MM]` to create missing monthly diary item events in Google Calendar.
+
 ### Changed
 
 - List output such as `diary -l` now highlights today's entry when printed directly to a terminal.
+- Google Calendar sync now creates one all-day event for each slash-separated diary item.
 
 ## [1.0.0] - 2026-06-04
 
