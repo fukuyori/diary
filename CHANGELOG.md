@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.1] - 2026-07-24
+
+### Changed
+
+- Changed the default number of entries shown by `diary -l` from 7 to 20.
+
 ## [2.0.0] - 2026-06-17
 
 ### Added

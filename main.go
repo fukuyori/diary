@@ -33,7 +33,7 @@ import (
 	"google.golang.org/api/option"
 )
 
-const appVersion = "2.0.0"
+const appVersion = "2.0.1"
 const maxBackupHistory = 10
 const backupTimestampLayout = "20060102-150405-000000000"
 const todayHighlightStart = "\x1b[1;33m"
@@ -218,7 +218,7 @@ func main() {
 
 func parseArgs(args []string) (Options, bool, error) {
 	var opts Options
-	opts.ListN = 7
+	opts.ListN = 20
 
 	if len(args) == 0 {
 		return opts, true, nil
@@ -602,7 +602,7 @@ func printHelp() {
 
   diary -l [件数]
       直近の記録を古いもの順で表示
-      件数省略時は 7
+      件数省略時は 20
 
   diary -m YYYY-MM -l [件数]
       指定した年月の記録を表示
@@ -1594,7 +1594,7 @@ func resolveLimit(total int, opts Options) int {
 		return 0
 	}
 
-	n := 7
+	n := 20
 	switch {
 	case opts.Search || opts.InteractiveSearch:
 		if opts.ListLimitSet {

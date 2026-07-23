@@ -4,7 +4,7 @@ A simple one-line diary application for the command line.
 
 [日本語版 README](README.ja.md)
 
-Current version: `2.0.0`
+Current version: `2.0.1`
 
 [Changelog](CHANGELOG.md)
 
@@ -13,12 +13,9 @@ Each entry is assigned a serial ID, only one entry is stored per date, and exist
 
 ---
 
-## What's New in 2.0.0
+## What's New in 2.0.1
 
-- Added `diary --sync-google [YYYY-MM]` to create missing monthly diary item events in Google Calendar
-- Google Calendar sync creates one all-day event for each `/` separated diary item
-- List output such as `diary -l` highlights today's entry when printed directly to a terminal
-- Includes the Linux `diary -v` calendar HTML output fix from 1.0.2
+- Changed the default number of entries shown by `diary -l` from 7 to 20
 
 ---
 
@@ -208,7 +205,7 @@ diary -A 2026-03-25 "Play"
 diary -A yesterday "Play"
 ```
 
-### List the most recent 7 entries in oldest-first order
+### List the most recent 20 entries in oldest-first order
 
 ```bash
 diary -l
