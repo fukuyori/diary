@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.2] - 2026-07-25
+
+### Changed
+
+- The help shown by running `diary` without arguments now displays the current environment's configuration file path and contents.
+- Removed the static configuration example from the help output.
+
 ## [2.0.1] - 2026-07-24
 
 ### Changed

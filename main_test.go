@@ -240,6 +240,43 @@ func TestPlatformConfigDirWindows(t *testing.T) {
 	}
 }
 
+func TestPrintHelpShowsCurrentConfigPathAndContents(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cfgContent := "data_file = \"test.jsonl\"\nmax_len = 300\n"
+	if err := os.WriteFile(cfgPath, []byte(cfgContent), 0o644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	var out bytes.Buffer
+	printHelpTo(&out, cfgPath, nil)
+	got := out.String()
+
+	if !strings.Contains(got, "設定ファイル:\n  "+cfgPath) {
+		t.Fatalf("config path missing from help: %q", got)
+	}
+	if !strings.Contains(got, "現在の設定ファイルの内容:\n"+cfgContent) {
+		t.Fatalf("config contents missing from help: %q", got)
+	}
+	if strings.Contains(got, "設定例:") || strings.Contains(got, "macOS:") {
+		t.Fatalf("obsolete config example remains in help: %q", got)
+	}
+}
+
+func TestPrintHelpReportsMissingConfig(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+
+	var out bytes.Buffer
+	printHelpTo(&out, cfgPath, nil)
+	got := out.String()
+
+	if !strings.Contains(got, cfgPath) {
+		t.Fatalf("config path missing from help: %q", got)
+	}
+	if !strings.Contains(got, "設定ファイルはまだ作成されていません") {
+		t.Fatalf("missing config message not found in help: %q", got)
+	}
+}
+
 func TestParseArgsRestore(t *testing.T) {
 	opts, showHelp, err := parseArgs([]string{"-R", "backup.jsonl"})
 	if err != nil {

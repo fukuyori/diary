@@ -33,7 +33,7 @@ import (
 	"google.golang.org/api/option"
 )
 
-const appVersion = "2.0.1"
+const appVersion = "2.0.2"
 const maxBackupHistory = 10
 const backupTimestampLayout = "20060102-150405-000000000"
 const todayHighlightStart = "\x1b[1;33m"
@@ -584,7 +584,12 @@ func splitEntryText(text string) []string {
 }
 
 func printHelp() {
-	fmt.Printf(`1行日記 CLI v%s
+	cfgPath, err := configFilePath()
+	printHelpTo(os.Stdout, cfgPath, err)
+}
+
+func printHelpTo(out io.Writer, cfgPath string, cfgPathErr error) {
+	fmt.Fprintf(out, `1行日記 CLI v%s
 
 使い方:
   diary
@@ -673,16 +678,33 @@ func printHelp() {
   diary -d yesterday N
       前日の記録から "/" 区切りの N 番目の項目を削除
 
-設定ファイル:
-  macOS: ~/Library/Application Support/diary/config.toml
-  Linux: ~/.config/diary/config.toml
-  Windows: %%LOCALAPPDATA%%\diary\config.toml
-
-設定例:
-  data_file = "C:\\Users\\yourname\\diary\\diary.jsonl"
-  max_len = 200
-  google_calendar_id = "primary"
 `, appVersion)
+
+	if cfgPathErr != nil {
+		fmt.Fprintf(out, "設定ファイル:\n  場所を取得できません: %v\n", cfgPathErr)
+		return
+	}
+
+	printCurrentConfig(out, cfgPath)
+}
+
+func printCurrentConfig(out io.Writer, cfgPath string) {
+	fmt.Fprintf(out, "設定ファイル:\n  %s\n\n現在の設定ファイルの内容:\n", cfgPath)
+
+	content, err := os.ReadFile(cfgPath)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		fmt.Fprintln(out, "  （設定ファイルはまだ作成されていません）")
+	case err != nil:
+		fmt.Fprintf(out, "  （設定ファイルを読み込めません: %v）\n", err)
+	case len(content) == 0:
+		fmt.Fprintln(out, "  （設定ファイルは空です）")
+	default:
+		fmt.Fprint(out, string(content))
+		if content[len(content)-1] != '\n' {
+			fmt.Fprintln(out)
+		}
+	}
 }
 
 func printVersion() {

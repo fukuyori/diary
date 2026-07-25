@@ -4,7 +4,7 @@ A simple one-line diary application for the command line.
 
 [日本語版 README](README.ja.md)
 
-Current version: `2.0.1`
+Current version: `2.0.2`
 
 [Changelog](CHANGELOG.md)
 
@@ -13,9 +13,10 @@ Each entry is assigned a serial ID, only one entry is stored per date, and exist
 
 ---
 
-## What's New in 2.0.1
+## What's New in 2.0.2
 
-- Changed the default number of entries shown by `diary -l` from 7 to 20
+- The help shown by running `diary` without arguments now displays the current environment's configuration file path and contents
+- Removed the static configuration example from the help output
 
 ---
 
